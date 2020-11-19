@@ -10,7 +10,7 @@ const BCF_MAJOR_VERSION: u8 = 2;
 const BCF_MINOR_VERSION: u8 = 2;
 
 fn main() -> Result<()> {
-    let path = "/home/till/projects/varlociraptor/bug/patient31.obs.uncompressed.bcf";
+    let path = "test/patient13.obs.uncompressed.bcf";
     // let mut reader = BGZFReader::new(std::fs::File::open(path)?);
     let mut reader = BufReader::new(std::fs::File::open(path)?);
     {
@@ -18,7 +18,7 @@ fn main() -> Result<()> {
         let num_bytes = reader.read_to_end(&mut buffer)?;
         dbg!(num_bytes);
         let record = parse(&buffer)?;
-        // dbg!(&record);
+        dbg!(&record);
     }
     Ok(())
 }

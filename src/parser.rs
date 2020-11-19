@@ -5,15 +5,15 @@ use std::str::FromStr;
 use anyhow::Result;
 use itertools::Itertools;
 use nom::branch::alt;
-use nom::bytes::streaming::{is_not, escaped_transform, escaped};
 use nom::bytes::streaming::take_while;
+use nom::bytes::streaming::{escaped, escaped_transform, is_not};
 use nom::character::is_digit;
 use nom::character::streaming::{alpha1, alphanumeric1, multispace0, none_of};
 use nom::character::streaming::{anychar, digit1};
-use nom::combinator::{eof, map, opt, recognize, complete};
+use nom::combinator::{complete, eof, map, opt, recognize};
 use nom::lib::std::str::Utf8Error;
 use nom::multi::{many0, many1, many_m_n, separated_list0};
-use nom::sequence::{delimited, separated_pair, terminated, preceded};
+use nom::sequence::{delimited, preceded, separated_pair, terminated};
 use nom::{
     bytes::streaming::{tag, take, take_while_m_n},
     combinator::map_res,
@@ -21,10 +21,11 @@ use nom::{
     sequence::tuple,
     IResult, Parser,
 };
-use num_enum::TryFromPrimitive;
-use strum::EnumString;
 
-use crate::types::{BcfRecord, Version};
+use crate::types::{
+    BcfRecord, HeaderKey, HeaderValue, InfoKey, InfoNumber, InfoType, TypeDescriptor, TypeKind,
+    TypedVec, Version,
+};
 
 fn bcf_version(input: &[u8]) -> IResult<&[u8], Version> {
     let (input, bcf) = tag(b"BCF")(input)?;
@@ -37,27 +38,6 @@ fn bcf_version(input: &[u8]) -> IResult<&[u8], Version> {
 fn header_length(input: &[u8]) -> IResult<&[u8], u32> {
     let (input, length) = le_u32(input)?;
     Ok((input, length))
-}
-
-struct Site {}
-
-#[derive(Debug)]
-struct TypeDescriptor {
-    kind: TypeKind,
-    num_elements: usize,
-}
-
-#[derive(Debug, Eq, PartialEq, TryFromPrimitive)]
-#[repr(u8)]
-enum TypeKind {
-    Missing = 0,
-    Int8 = 1,
-    Int16 = 2,
-    Int32 = 3,
-    Reserved4 = 4,
-    Float32 = 5,
-    Reserved6 = 6,
-    String = 7,
 }
 
 fn type_descriptor(input: &[u8]) -> IResult<&[u8], TypeDescriptor> {
@@ -129,20 +109,6 @@ fn typed_f32s(input: &[u8]) -> IResult<&[u8], Vec<f32>> {
     assert_eq!(kind, TypeKind::Float32);
     let (input, data) = many_m_n(num_elements, num_elements, le_f32)(input)?;
     Ok((input, data))
-}
-
-// The first value must be a typed atomic integer giving the offset of the INFO field key into the dictionary.
-pub type InfoKey = usize;
-pub type FormatKey = usize;
-
-#[derive(Debug)]
-pub enum TypedVec {
-    Missing,
-    Int8(Vec<i8>),
-    Int16(Vec<i16>),
-    Int32(Vec<i32>),
-    Float32(Vec<f32>),
-    String(Vec<String>),
 }
 
 fn typed_vec(input: &[u8]) -> IResult<&[u8], TypedVec> {
@@ -246,53 +212,26 @@ fn record(input: &[u8]) -> IResult<&[u8], BcfRecord> {
     ))
 }
 
-#[derive(Debug)]
-pub struct Header<'a> {
-    meta: HashMap<&'a str, &'a str>,
-    info: Vec<HeaderInfo<'a>>,
+fn parse_usize(input: &str) -> usize {
+    input.parse().unwrap()
 }
 
-type HeaderKey<'a> = &'a str;
-
-#[derive(Debug, Eq, PartialEq, EnumString)]
-pub enum InfoType {
-    Integer,
-    Float,
-    Flag,
-    Character,
-    String,
+fn info_number(input: &str) -> IResult<&str, InfoNumber> {
+    let r: IResult<&str, usize> = map(nom::character::complete::digit1, parse_usize)(input);
+    if let Ok((input, number)) = r {
+        Ok((input, InfoNumber::Count(number)))
+    } else {
+        let (input, char) = alt((nom::character::complete::alpha1, tag(".")))(input)?;
+        let number = match char {
+            "A" => InfoNumber::AlternateAlleles,
+            "R" => InfoNumber::Alleles,
+            "G" => InfoNumber::Genotypes,
+            "." => InfoNumber::Unknown,
+            x => panic!("Unknown Number type {}", x),
+        };
+        Ok((input, number))
+    }
 }
-
-#[derive(Debug, Eq, PartialEq)]
-pub enum InfoNumber {
-    Count(usize),
-    Alleles,
-    AlternateAlleles,
-    Genotypes,
-    Unknown,
-}
-
-
-// fn parse_usize(input: &str) -> usize {
-//     input.parse().unwrap()
-// }
-
-// fn info_number(input: &str) -> IResult<&str, InfoNumber> {
-//     let r: IResult<&str, usize> = map(digit1, parse_usize)(input);
-//     if let Ok((input, number)) = r {
-//         Ok((input, InfoNumber::Count(number)))
-//     } else {
-//         let (input, char) = alpha1(input)?;
-//         let number = match char {
-//             "A" => InfoNumber::AlternateAlleles,
-//             "R" => InfoNumber::Alleles,
-//             "G" => InfoNumber::Genotypes,
-//             "." => InfoNumber::Unknown,
-//             x => panic!("Unknown Number type {}", x),
-//         };
-//         Ok((input, number))
-//     }
-// }
 
 #[derive(Debug)]
 pub struct HeaderInfo<'a> {
@@ -308,41 +247,30 @@ pub struct HeaderInfo<'a> {
     additional: HashMap<&'a str, &'a str>,
 }
 
-// impl<'a> From<Vec<(&'a str, &'a str)>> for HeaderInfo<'a> {
-//     fn from(data: Vec<(&'a str, &'a str)>) -> Self {
-//         let mut h: HashMap<_, _> = data.into_iter().collect();
-//         let mut header_info = HeaderInfo {
-//             id: h.remove("ID").expect("ID is mandatory"),
-//             number: info_number(h.remove("Number").expect("Number is mandatory")).unwrap().1,
-//             kind: InfoType::from_str(h.remove("Type").expect("Type is mandatory")).unwrap(),
-//             description: h.remove("Description").expect("Description is mandatory"),
-//             source: h.remove("Source").unwrap_or(&""),
-//             version: h.remove("Version").unwrap_or(&""),
-//             idx: str::parse(h.remove("IDX").unwrap_or(&"0")).unwrap(),
-//             additional: Default::default(),
-//         };
-//         header_info.additional = h;
-//         header_info
-//     }
-// }
-
-#[derive(Debug)]
-pub enum HeaderValue<'a> {
-    String(&'a str),
-    Info(HashMap<&'a str, &'a str>),
-    Filter(HashMap<&'a str, &'a str>),
-    Format(HashMap<&'a str, &'a str>),
-    Contig(HashMap<&'a str, &'a str>),
+impl<'a> From<Vec<(&'a str, &'a str)>> for HeaderInfo<'a> {
+    fn from(data: Vec<(&'a str, &'a str)>) -> Self {
+        let mut h: HashMap<_, _> = data.into_iter().collect();
+        let mut header_info = HeaderInfo {
+            id: h.remove("ID").expect("ID is mandatory"),
+            number: info_number(h.remove("Number").expect("Number is mandatory"))
+                .unwrap()
+                .1,
+            kind: InfoType::from_str(h.remove("Type").expect("Type is mandatory")).unwrap(),
+            description: h.remove("Description").expect("Description is mandatory"),
+            source: h.remove("Source").unwrap_or(&""),
+            version: h.remove("Version").unwrap_or(&""),
+            idx: str::parse(h.remove("IDX").unwrap_or(&"0")).unwrap(),
+            additional: Default::default(),
+        };
+        header_info.additional = h;
+        header_info
+    }
 }
 
 fn string(input: &[u8]) -> IResult<&[u8], &[u8]> {
     delimited(
         tag("\""),
-        escaped(
-            none_of("\\\""),
-            '\\',
-            alt((tag("\\"), tag("\""))),
-        ),
+        escaped(none_of("\\\""), '\\', alt((tag("\\"), tag("\"")))),
         tag("\""),
     )(input)
 }
@@ -367,16 +295,20 @@ fn header_value_mapping(input: &[u8]) -> IResult<&[u8], HashMap<&str, &str>> {
     Ok((input, mapping.into_iter().collect()))
 }
 
+fn header_line(input: &[u8]) -> IResult<&[u8], &[u8]> {
+    delimited(tag(b"##"), is_not("\n"), tag("\n"))(input)
+}
+
 fn header_entry(input: &[u8]) -> IResult<&[u8], (HeaderKey, HeaderValue)> {
     let (input, line) = header_line(input)?;
-    let (_rest, (key, value)) = separated_pair(
-        is_not("="),
-        tag("="),
-        nom::bytes::complete::is_not("\n")
-    )(line)?;
+    let (_rest, (key, value)) =
+        separated_pair(is_not("="), tag("="), nom::bytes::complete::is_not("\n"))(line)?;
     let key = std::str::from_utf8(key).unwrap();
     let value = match key {
-        "INFO" => HeaderValue::Info(delimited(tag("<"), header_value_mapping, tag(">"))(value)?.1),
+        "INFO" => {
+            let data = delimited(tag("<"), header_value_mapping, tag(">"))(value)?.1;
+            HeaderValue::Info(HeaderInfo::from(data.into_iter().collect_vec()))
+        }
         "FILTER" => {
             HeaderValue::Filter(delimited(tag("<"), header_value_mapping, tag(">"))(value)?.1)
         }
@@ -384,10 +316,6 @@ fn header_entry(input: &[u8]) -> IResult<&[u8], (HeaderKey, HeaderValue)> {
     };
     // dbg!(&key, &value);
     Ok((input, (key, value)))
-}
-
-fn header_line(input: &[u8]) -> IResult<&[u8], &[u8]> {
-    delimited(tag(b"##"), is_not("\n"), tag("\n"))(input)
 }
 
 fn header(header_length: u32, input: &[u8]) -> IResult<&[u8], &[u8]> {
