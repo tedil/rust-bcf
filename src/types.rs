@@ -1,10 +1,10 @@
 use std::borrow::Cow;
 
-use nom::lib::std::collections::HashMap;
 use num_enum::TryFromPrimitive;
 use strum::EnumString;
 
-use crate::parser::HeaderInfo;
+use crate::parser::{HeaderContig, HeaderFilter, HeaderFormat, HeaderInfo};
+use multimap::MultiMap;
 
 const MISSING_QUAL: f32 = 0x7F800001 as f32;
 
@@ -64,8 +64,10 @@ pub enum TypedVec<'a> {
 
 #[derive(Debug)]
 pub struct Header<'a> {
-    pub(crate) meta: HashMap<&'a str, &'a str>,
+    pub(crate) meta: MultiMap<&'a str, HeaderValue<'a>>,
     pub(crate) info: Vec<HeaderInfo<'a>>,
+    pub(crate) format: Vec<HeaderFormat<'a>>,
+    pub(crate) contigs: Vec<HeaderContig<'a>>,
 }
 
 pub type HeaderKey<'a> = &'a str;
@@ -92,7 +94,7 @@ pub enum InfoNumber {
 pub enum HeaderValue<'a> {
     String(&'a str),
     Info(HeaderInfo<'a>),
-    Filter(HashMap<&'a str, &'a str>),
-    Format(HashMap<&'a str, &'a str>),
-    Contig(HashMap<&'a str, &'a str>),
+    Filter(HeaderFilter<'a>),
+    Format(HeaderFormat<'a>),
+    Contig(HeaderContig<'a>),
 }

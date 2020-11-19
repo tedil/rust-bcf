@@ -18,10 +18,8 @@ fn main() -> Result<()> {
     let num_bytes = reader.read_to_end(&mut buffer)?;
     dbg!(num_bytes);
     let records = parse(&buffer);
-    let counts: Counter<_> = records
-        .map(|record| record.ref_allele)
-        .collect();
-    dbg!(&counts.most_common_ordered());
+    let counts: Counter<_> = records.map(|record| record.ref_allele).collect();
+    dbg!(&counts.most_common_ordered()[..10]);
 
     // dbg!(&records);
     Ok(())

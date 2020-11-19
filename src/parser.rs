@@ -1,8 +1,10 @@
 use std::collections::HashMap;
 use std::convert::TryFrom;
+use std::iter::FromIterator;
 use std::str::FromStr;
 
 use itertools::Itertools;
+use multimap::MultiMap;
 use nom::branch::alt;
 use nom::bytes::streaming::{escaped, is_not};
 use nom::character::streaming::none_of;
@@ -14,7 +16,7 @@ use nom::{
     bytes::streaming::{tag, take},
     number::streaming::{le_f32, le_i16, le_i32, le_i8, le_u24, le_u32, le_u8},
     sequence::tuple,
-    IResult
+    IResult,
 };
 
 use crate::types::{
@@ -307,6 +309,66 @@ impl<'a> From<Vec<(&'a str, &'a str)>> for HeaderInfo<'a> {
     }
 }
 
+#[derive(Debug)]
+pub struct HeaderFormat<'a> {
+    id: &'a str,
+    number: InfoNumber,
+    kind: InfoType,
+    description: &'a str,
+    idx: usize,
+}
+
+impl<'a> From<Vec<(&'a str, &'a str)>> for HeaderFormat<'a> {
+    fn from(data: Vec<(&'a str, &'a str)>) -> Self {
+        let mut h: HashMap<_, _> = data.into_iter().collect();
+        HeaderFormat {
+            id: h.remove("ID").expect("ID is mandatory"),
+            number: info_number(h.remove("Number").expect("Number is mandatory"))
+                .unwrap()
+                .1,
+            kind: InfoType::from_str(h.remove("Type").expect("Type is mandatory")).unwrap(),
+            description: h.remove("Description").expect("Description is mandatory"),
+            idx: str::parse(h.remove("IDX").unwrap_or(&"0")).unwrap(),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct HeaderContig<'a> {
+    id: &'a str,
+    length: Option<usize>,
+    additional: HashMap<&'a str, &'a str>,
+}
+
+impl<'a> From<Vec<(&'a str, &'a str)>> for HeaderContig<'a> {
+    fn from(data: Vec<(&'a str, &'a str)>) -> Self {
+        let mut h: HashMap<_, _> = data.into_iter().collect();
+        let mut header_info = HeaderContig {
+            id: h.remove("ID").expect("ID is mandatory"),
+            length: h.remove("length").map(|s| s.parse().ok()).flatten(),
+            additional: Default::default(),
+        };
+        header_info.additional = h;
+        header_info
+    }
+}
+
+#[derive(Debug)]
+pub struct HeaderFilter<'a> {
+    id: &'a str,
+    description: &'a str,
+}
+
+impl<'a> From<Vec<(&'a str, &'a str)>> for HeaderFilter<'a> {
+    fn from(data: Vec<(&'a str, &'a str)>) -> Self {
+        let mut h: HashMap<_, _> = data.into_iter().collect();
+        HeaderFilter {
+            id: h.remove("ID").expect("ID is mandatory"),
+            description: h.remove("Description").expect("Description is mandatory"),
+        }
+    }
+}
+
 fn delimited_string(input: &[u8]) -> IResult<&[u8], &[u8]> {
     delimited(
         tag("\""),
@@ -352,8 +414,17 @@ fn header_entry(input: &[u8]) -> IResult<&[u8], (HeaderKey, HeaderValue)> {
             let data = delimited(tag("<"), header_value_mapping, tag(">"))(value)?.1;
             HeaderValue::Info(HeaderInfo::from(data.into_iter().collect_vec()))
         }
+        "FORMAT" => {
+            let data = delimited(tag("<"), header_value_mapping, tag(">"))(value)?.1;
+            HeaderValue::Format(HeaderFormat::from(data.into_iter().collect_vec()))
+        }
+        "contig" => {
+            let data = delimited(tag("<"), header_value_mapping, tag(">"))(value)?.1;
+            HeaderValue::Contig(HeaderContig::from(data.into_iter().collect_vec()))
+        }
         "FILTER" => {
-            HeaderValue::Filter(delimited(tag("<"), header_value_mapping, tag(">"))(value)?.1)
+            let data = delimited(tag("<"), header_value_mapping, tag(">"))(value)?.1;
+            HeaderValue::Filter(HeaderFilter::from(data.into_iter().collect_vec()))
         }
         _ => HeaderValue::String(std::str::from_utf8(value).unwrap()),
     };
@@ -363,16 +434,33 @@ fn header_entry(input: &[u8]) -> IResult<&[u8], (HeaderKey, HeaderValue)> {
 fn header(header_length: u32, input: &[u8]) -> IResult<&[u8], Header> {
     let (input, header) = take(header_length)(input)?;
     let (_header, entries) = many0(header_entry)(header)?;
+    let mut entries = MultiMap::from_iter(entries);
+    let info = entries.remove("INFO").unwrap_or_else(|| vec![]);
+    let format = entries.remove("FORMAT").unwrap_or_else(|| vec![]);
+    let contigs = entries.remove("CONTIG").unwrap_or_else(|| vec![]);
     let header = Header {
-        meta: Default::default(),
-        info: entries
+        meta: entries,
+        info: info
             .into_iter()
-            .filter(|&(k, _)| k == "INFO")
-            .filter_map(|(_, v)| match v {
+            .filter_map(|v| match v {
                 HeaderValue::Info(info) => Some(info),
                 _ => None,
             })
-            .collect_vec(),
+            .collect(),
+        contigs: contigs
+            .into_iter()
+            .filter_map(|v| match v {
+                HeaderValue::Contig(contig) => Some(contig),
+                _ => None,
+            })
+            .collect(),
+        format: format
+            .into_iter()
+            .filter_map(|v| match v {
+                HeaderValue::Format(format) => Some(format),
+                _ => None,
+            })
+            .collect(),
     };
     Ok((input, header))
 }

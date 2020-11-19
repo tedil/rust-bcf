@@ -15,6 +15,7 @@ num_enum = "0.5"
 num_enum_derive = "0.5"
 strum = { version = "0.19", features = ["derive"] }
 counter = "0.5"
+multimap = "0.8"
 
 [profile.release]
 lto = "fat"
