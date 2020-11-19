@@ -209,8 +209,8 @@ fn genotype_field(n_sample: u32, input: &[u8]) -> IResult<&[u8], (usize, Vec<Typ
     Ok((input, (fmt_key_offset as FormatKey, sample_values)))
 }
 
-fn record<'a>(header: &Header<'a>, input: &'a [u8]) -> IResult<&'a [u8], BcfRecord<'a>> {
-    let (input, (l_shared, l_indiv, chrom, pos, rlen, qual, n_info, n_allele, n_sample, n_fmt)) =
+fn record<'a>(_header: &Header<'a>, input: &'a [u8]) -> IResult<&'a [u8], BcfRecord<'a>> {
+    let (input, (_l_shared, l_indiv, chrom, pos, _rlen, qual, n_info, n_allele, n_sample, n_fmt)) =
         tuple((
             le_u32, le_u32, le_i32, le_i32, le_i32, le_f32, le_i16, le_i16, le_u24, le_u8,
         ))(input)?;
@@ -234,7 +234,7 @@ fn record<'a>(header: &Header<'a>, input: &'a [u8]) -> IResult<&'a [u8], BcfReco
             chrom: chrom as u32,
             pos: pos as u32,
             id: Some(id),
-            ref_allele: alleles[0].clone(),
+            ref_allele: alleles[0],
             alt_alleles: if alleles.len() > 1 {
                 alleles[1..].to_vec()
             } else {
@@ -435,9 +435,9 @@ fn header(header_length: u32, input: &[u8]) -> IResult<&[u8], Header> {
     let (input, header) = take(header_length)(input)?;
     let (_header, entries) = many0(header_entry)(header)?;
     let mut entries = MultiMap::from_iter(entries);
-    let info = entries.remove("INFO").unwrap_or_else(|| vec![]);
-    let format = entries.remove("FORMAT").unwrap_or_else(|| vec![]);
-    let contigs = entries.remove("CONTIG").unwrap_or_else(|| vec![]);
+    let info = entries.remove("INFO").unwrap_or_else(Vec::new);
+    let format = entries.remove("FORMAT").unwrap_or_else(Vec::new);
+    let contigs = entries.remove("CONTIG").unwrap_or_else(Vec::new);
     let header = Header {
         meta: entries,
         info: info
