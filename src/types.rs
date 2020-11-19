@@ -3,6 +3,7 @@ use num_enum::TryFromPrimitive;
 use strum::EnumString;
 
 use crate::parser::HeaderInfo;
+use std::borrow::Cow;
 
 #[repr(C)]
 struct BcfString {}
@@ -10,18 +11,19 @@ struct BcfString {}
 const MISSING_QUAL: f32 = 0x7F800001 as f32;
 
 #[derive(Debug)]
-pub struct BcfRecord {
+pub struct BcfRecord<'a> {
     pub(crate) chrom: u32,
     pub(crate) pos: u32,
-    pub(crate) id: Option<String>,
-    pub(crate) ref_allele: String,
-    pub(crate) alt_alleles: Vec<String>,
+    pub(crate) id: Option<&'a str>,
+    pub(crate) ref_allele: &'a str,
+    pub(crate) alt_alleles: Vec<&'a str>,
     pub(crate) qual: Option<f32>,
-    pub(crate) filter: Vec<i32>, // pointer into header dict
-    pub(crate) info: Vec<(InfoKey, TypedVec)>,
-    pub(crate) format: Option<Vec<(FormatKey, Vec<TypedVec>)>>,
+    pub(crate) filter: Vec<usize>, // pointer into header dict
+    pub(crate) info: Vec<(InfoKey, TypedVec<'a>)>,
+    pub(crate) format: Option<Vec<(FormatKey, Vec<TypedVec<'a>>)>>,
 }
 
+#[derive(Debug)]
 #[repr(C)]
 pub struct Version {
     pub(crate) major: u8,
@@ -52,13 +54,13 @@ pub type InfoKey = usize;
 pub type FormatKey = usize;
 
 #[derive(Debug)]
-pub enum TypedVec {
+pub enum TypedVec<'a> {
     Missing,
     Int8(Vec<i8>),
     Int16(Vec<i16>),
     Int32(Vec<i32>),
     Float32(Vec<f32>),
-    String(Vec<String>),
+    String(Cow<'a, str>),
 }
 
 #[derive(Debug)]

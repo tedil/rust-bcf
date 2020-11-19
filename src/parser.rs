@@ -13,6 +13,7 @@ use nom::character::streaming::{anychar, digit1};
 use nom::combinator::{complete, eof, map, opt, recognize};
 use nom::lib::std::str::Utf8Error;
 use nom::multi::{many0, many1, many_m_n, many_till, separated_list0};
+use nom::number::streaming::le_u16;
 use nom::sequence::{delimited, preceded, separated_pair, terminated};
 use nom::{
     bytes::streaming::{tag, take, take_while_m_n},
@@ -28,8 +29,7 @@ use crate::types::{
 };
 
 fn bcf_version(input: &[u8]) -> IResult<&[u8], Version> {
-    let (input, bcf) = tag(b"BCF")(input)?;
-    assert_eq!(bcf, b"BCF");
+    let (input, _bcf) = tag(b"BCF")(input)?;
     let (input, major) = le_u8(input)?;
     let (input, minor) = le_u8(input)?;
     Ok((input, Version { major, minor }))
@@ -38,6 +38,16 @@ fn bcf_version(input: &[u8]) -> IResult<&[u8], Version> {
 fn header_length(input: &[u8]) -> IResult<&[u8], u32> {
     let (input, length) = le_u32(input)?;
     Ok((input, length))
+}
+
+fn read_int(kind: TypeKind, input: &[u8]) -> IResult<&[u8], usize> {
+    assert!(kind == TypeKind::Int8 || kind == TypeKind::Int16 || kind == TypeKind::Int32);
+    match kind {
+        TypeKind::Int8 => map(le_u8, |v| v as usize)(input),
+        TypeKind::Int16 => map(le_u16, |v| v as usize)(input),
+        TypeKind::Int32 => map(le_u32, |v| v as usize)(input),
+        _ => unreachable!(),
+    }
 }
 
 fn type_descriptor(input: &[u8]) -> IResult<&[u8], TypeDescriptor> {
@@ -53,8 +63,7 @@ fn type_descriptor(input: &[u8]) -> IResult<&[u8], TypeDescriptor> {
             },
         ) = type_descriptor(input)?;
         assert_eq!(num_num_elements_ints, 1);
-        let (input, num_elements) = le_u8(input)?;
-        assert!(int == TypeKind::Int8 || int == TypeKind::Int16 || int == TypeKind::Int32);
+        let (input, num_elements) = read_int(int, input)?;
         (input, num_elements as usize)
     } else {
         (input, num_elements as usize)
@@ -68,11 +77,11 @@ fn type_descriptor(input: &[u8]) -> IResult<&[u8], TypeDescriptor> {
     ))
 }
 
-fn typed_string(input: &[u8]) -> IResult<&[u8], String> {
+fn typed_string(input: &[u8]) -> IResult<&[u8], &str> {
     let (input, TypeDescriptor { kind, num_elements }) = type_descriptor(input)?;
     assert_eq!(kind, TypeKind::String);
     let (input, string) = take(num_elements)(input)?;
-    Ok((input, String::from_utf8(string.to_vec()).unwrap()))
+    Ok((input, std::str::from_utf8(string).unwrap()))
 }
 
 fn read_string(length: usize, input: &[u8]) -> IResult<&[u8], String> {
@@ -125,6 +134,23 @@ fn typed_int32s(input: &[u8]) -> IResult<&[u8], Vec<i32>> {
     Ok((input, data))
 }
 
+fn typed_ints(input: &[u8]) -> IResult<&[u8], Vec<usize>> {
+    let (input, TypeDescriptor { kind, num_elements }) = type_descriptor(input)?;
+    match kind {
+        TypeKind::Missing => Ok((input, vec![])),
+        TypeKind::Int32 => map(many_m_n(num_elements, num_elements, le_i32), |v| {
+            v.into_iter().map(|s| s as usize).collect()
+        })(input),
+        TypeKind::Int16 => map(many_m_n(num_elements, num_elements, le_i16), |v| {
+            v.into_iter().map(|s| s as usize).collect()
+        })(input),
+        TypeKind::Int8 => map(many_m_n(num_elements, num_elements, le_i8), |v| {
+            v.into_iter().map(|s| s as usize).collect()
+        })(input),
+        other => panic!("Unsupported FILTER type: {:?}", other),
+    }
+}
+
 fn typed_f32s(input: &[u8]) -> IResult<&[u8], Vec<f32>> {
     let (input, TypeDescriptor { kind, num_elements }) = type_descriptor(input)?;
     assert_eq!(kind, TypeKind::Float32);
@@ -135,7 +161,7 @@ fn typed_f32s(input: &[u8]) -> IResult<&[u8], Vec<f32>> {
 fn typed_vec_from_td<'a, 'b>(
     type_descriptor: &'b TypeDescriptor,
     input: &'a [u8],
-) -> IResult<&'a [u8], TypedVec> {
+) -> IResult<&'a [u8], TypedVec<'a>> {
     let num_elements = type_descriptor.num_elements;
     let (input, vec) = match type_descriptor.kind {
         TypeKind::Missing => (input, TypedVec::Missing),
@@ -162,11 +188,13 @@ fn typed_vec_from_td<'a, 'b>(
             unimplemented!()
         }
         TypeKind::String => {
-            let (input, data) = many_m_n(num_elements, num_elements, le_u8)(input)?;
-            let data = String::from_utf8(data.to_vec()).unwrap();
+            // let (input, data) = many_m_n(num_elements, num_elements, le_u8)(input)?;
+            // let data = String::from_utf8(data.to_vec()).unwrap();
+            let (data, input) = input.split_at(num_elements);
             (
                 input,
-                TypedVec::String(data.split(',').map(str::to_owned).collect_vec()),
+                // TypedVec::String(data.split(',').map(str::to_owned).collect_vec()),
+                TypedVec::String(String::from_utf8_lossy(&data)),
             )
         }
     };
@@ -229,7 +257,7 @@ fn record(input: &[u8]) -> IResult<&[u8], BcfRecord> {
     let (input, id) = typed_string(input)?;
     let (input, (alleles, filters)) = tuple((
         many_m_n(n_allele as usize, n_allele as usize, typed_string),
-        typed_int32s,
+        typed_ints,
     ))(input)?;
     let (input, info) = info(n_info, input)?;
     let (input, format) = if l_indiv > 0 {
@@ -320,7 +348,7 @@ impl<'a> From<Vec<(&'a str, &'a str)>> for HeaderInfo<'a> {
     }
 }
 
-fn string(input: &[u8]) -> IResult<&[u8], &[u8]> {
+fn delimited_string(input: &[u8]) -> IResult<&[u8], &[u8]> {
     delimited(
         tag("\""),
         escaped(none_of("\\\""), '\\', alt((tag("\\"), tag("\"")))),
@@ -330,8 +358,11 @@ fn string(input: &[u8]) -> IResult<&[u8], &[u8]> {
 
 fn keys_and_values(input: &[u8]) -> IResult<&[u8], Vec<(&str, &str)>> {
     fn key_value(input: &[u8]) -> IResult<&[u8], (&str, &str)> {
-        let (input, (key, value)) =
-            separated_pair(is_not("<,=\n"), tag(b"="), alt((string, is_not(">,=\n"))))(input)?;
+        let (input, (key, value)) = separated_pair(
+            is_not("<,=\n"),
+            tag(b"="),
+            alt((delimited_string, is_not(">,=\n"))),
+        )(input)?;
         Ok((
             input,
             (
@@ -370,16 +401,19 @@ fn header_entry(input: &[u8]) -> IResult<&[u8], (HeaderKey, HeaderValue)> {
     Ok((input, (key, value)))
 }
 
-fn header(header_length: u32, input: &[u8]) -> IResult<&[u8], &[u8]> {
+fn header(header_length: u32, input: &[u8]) -> IResult<&[u8], Vec<(HeaderKey, HeaderValue)>> {
     let (input, header) = take(header_length)(input)?;
     let (header, entries) = many0(header_entry)(header)?;
-    Ok((input, header))
+    Ok((input, entries))
 }
 
 pub fn parse(input: &[u8]) -> Result<Vec<BcfRecord>> {
     let (input, version) = bcf_version(input).unwrap();
+    dbg!(version);
     let (input, header_length) = header_length(input).unwrap();
+    dbg!(header_length);
     let (input, header) = header(header_length, input).unwrap();
+    dbg!(header);
     let (input, records) = many_till(record, eof)(input).unwrap();
     Ok(records.0)
 }
