@@ -2,25 +2,19 @@ use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::str::FromStr;
 
-use anyhow::Result;
 use itertools::Itertools;
 use nom::branch::alt;
-use nom::bytes::streaming::take_while;
-use nom::bytes::streaming::{escaped, escaped_transform, is_not};
-use nom::character::is_digit;
-use nom::character::streaming::{alpha1, alphanumeric1, multispace0, none_of};
-use nom::character::streaming::{anychar, digit1};
-use nom::combinator::{complete, eof, map, opt, recognize};
-use nom::lib::std::str::Utf8Error;
-use nom::multi::{many0, many1, many_m_n, many_till, separated_list0};
+use nom::bytes::streaming::{escaped, is_not};
+use nom::character::streaming::none_of;
+use nom::combinator::map;
+use nom::multi::{many0, many_m_n, separated_list0};
 use nom::number::streaming::le_u16;
-use nom::sequence::{delimited, preceded, separated_pair, terminated};
+use nom::sequence::{delimited, separated_pair};
 use nom::{
-    bytes::streaming::{tag, take, take_while_m_n},
-    combinator::map_res,
+    bytes::streaming::{tag, take},
     number::streaming::{le_f32, le_i16, le_i32, le_i8, le_u24, le_u32, le_u8},
     sequence::tuple,
-    IResult, Parser,
+    IResult
 };
 
 use crate::types::{
@@ -84,11 +78,6 @@ fn typed_string(input: &[u8]) -> IResult<&[u8], &str> {
     Ok((input, std::str::from_utf8(string).unwrap()))
 }
 
-fn read_string(length: usize, input: &[u8]) -> IResult<&[u8], String> {
-    let (input, string) = take(length)(input)?;
-    Ok((input, String::from_utf8(string.to_vec()).unwrap()))
-}
-
 fn typed_int(input: &[u8]) -> IResult<&[u8], usize> {
     let (input, TypeDescriptor { kind, num_elements }) = type_descriptor(input)?;
     assert_eq!(num_elements, 1);
@@ -110,30 +99,6 @@ fn typed_int(input: &[u8]) -> IResult<&[u8], usize> {
     Ok((input, value))
 }
 
-fn typed_int8s(input: &[u8]) -> IResult<&[u8], Vec<i8>> {
-    let (input, TypeDescriptor { kind, num_elements }) = type_descriptor(input)?;
-    assert_eq!(kind, TypeKind::Int8);
-    let (input, data) = many_m_n(num_elements, num_elements, le_i8)(input)?;
-    Ok((input, data))
-}
-
-fn typed_int16s(input: &[u8]) -> IResult<&[u8], Vec<i16>> {
-    let (input, TypeDescriptor { kind, num_elements }) = type_descriptor(input)?;
-    assert_eq!(kind, TypeKind::Int16);
-    let (input, data) = many_m_n(num_elements, num_elements, le_i16)(input)?;
-    Ok((input, data))
-}
-
-fn typed_int32s(input: &[u8]) -> IResult<&[u8], Vec<i32>> {
-    let (input, TypeDescriptor { kind, num_elements }) = type_descriptor(input)?;
-    assert!(kind == TypeKind::Int32 || kind == TypeKind::Missing);
-    if kind == TypeKind::Missing {
-        return Ok((input, vec![]));
-    }
-    let (input, data) = many_m_n(num_elements, num_elements, le_i32)(input)?;
-    Ok((input, data))
-}
-
 fn typed_ints(input: &[u8]) -> IResult<&[u8], Vec<usize>> {
     let (input, TypeDescriptor { kind, num_elements }) = type_descriptor(input)?;
     match kind {
@@ -149,13 +114,6 @@ fn typed_ints(input: &[u8]) -> IResult<&[u8], Vec<usize>> {
         })(input),
         other => panic!("Unsupported FILTER type: {:?}", other),
     }
-}
-
-fn typed_f32s(input: &[u8]) -> IResult<&[u8], Vec<f32>> {
-    let (input, TypeDescriptor { kind, num_elements }) = type_descriptor(input)?;
-    assert_eq!(kind, TypeKind::Float32);
-    let (input, data) = many_m_n(num_elements, num_elements, le_f32)(input)?;
-    Ok((input, data))
 }
 
 fn typed_vec_from_td<'a, 'b>(
@@ -249,7 +207,7 @@ fn genotype_field(n_sample: u32, input: &[u8]) -> IResult<&[u8], (usize, Vec<Typ
     Ok((input, (fmt_key_offset as FormatKey, sample_values)))
 }
 
-fn record(input: &[u8]) -> IResult<&[u8], BcfRecord> {
+fn record<'a>(header: &Header<'a>, input: &'a [u8]) -> IResult<&'a [u8], BcfRecord<'a>> {
     let (input, (l_shared, l_indiv, chrom, pos, rlen, qual, n_info, n_allele, n_sample, n_fmt)) =
         tuple((
             le_u32, le_u32, le_i32, le_i32, le_i32, le_f32, le_i16, le_i16, le_u24, le_u8,
@@ -289,6 +247,7 @@ fn record(input: &[u8]) -> IResult<&[u8], BcfRecord> {
             filter: filters,
             info,
             format,
+            header: None,
         },
     ))
 }
@@ -401,19 +360,55 @@ fn header_entry(input: &[u8]) -> IResult<&[u8], (HeaderKey, HeaderValue)> {
     Ok((input, (key, value)))
 }
 
-fn header(header_length: u32, input: &[u8]) -> IResult<&[u8], Vec<(HeaderKey, HeaderValue)>> {
+fn header(header_length: u32, input: &[u8]) -> IResult<&[u8], Header> {
     let (input, header) = take(header_length)(input)?;
-    let (header, entries) = many0(header_entry)(header)?;
-    Ok((input, entries))
+    let (_header, entries) = many0(header_entry)(header)?;
+    let header = Header {
+        meta: Default::default(),
+        info: entries
+            .into_iter()
+            .filter(|&(k, _)| k == "INFO")
+            .filter_map(|(_, v)| match v {
+                HeaderValue::Info(info) => Some(info),
+                _ => None,
+            })
+            .collect_vec(),
+    };
+    Ok((input, header))
 }
 
-pub fn parse(input: &[u8]) -> Result<Vec<BcfRecord>> {
+const BCF_MAJOR_VERSION: u8 = 2;
+const BCF_MINOR_VERSION: u8 = 2;
+
+pub fn parse(input: &[u8]) -> impl Iterator<Item = BcfRecord> + '_ {
     let (input, version) = bcf_version(input).unwrap();
+    assert_eq!(version.major, BCF_MAJOR_VERSION);
+    assert_eq!(version.minor, BCF_MINOR_VERSION);
     dbg!(version);
     let (input, header_length) = header_length(input).unwrap();
     dbg!(header_length);
     let (input, header) = header(header_length, input).unwrap();
-    dbg!(header);
-    let (input, records) = many_till(record, eof)(input).unwrap();
-    Ok(records.0)
+    dbg!(&header);
+
+    struct BcfRecordsIterator<'a> {
+        input: &'a [u8],
+        header: Header<'a>,
+    }
+
+    impl<'a> Iterator for BcfRecordsIterator<'a> {
+        type Item = BcfRecord<'a>;
+
+        fn next(&mut self) -> Option<Self::Item> {
+            if !self.input.is_empty() {
+                let (inp, rec) = record(&self.header, self.input).unwrap();
+                self.input = inp;
+                Some(rec)
+            } else {
+                None
+            }
+        }
+    }
+    // let (input, records) = many_till(record, eof)(input).unwrap();
+    // Ok(records.0)
+    BcfRecordsIterator { input, header }
 }

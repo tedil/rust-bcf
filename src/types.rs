@@ -1,12 +1,10 @@
+use std::borrow::Cow;
+
 use nom::lib::std::collections::HashMap;
 use num_enum::TryFromPrimitive;
 use strum::EnumString;
 
 use crate::parser::HeaderInfo;
-use std::borrow::Cow;
-
-#[repr(C)]
-struct BcfString {}
 
 const MISSING_QUAL: f32 = 0x7F800001 as f32;
 
@@ -21,6 +19,7 @@ pub struct BcfRecord<'a> {
     pub(crate) filter: Vec<usize>, // pointer into header dict
     pub(crate) info: Vec<(InfoKey, TypedVec<'a>)>,
     pub(crate) format: Option<Vec<(FormatKey, Vec<TypedVec<'a>>)>>,
+    pub(crate) header: Option<&'a Header<'a>>,
 }
 
 #[derive(Debug)]
@@ -65,8 +64,8 @@ pub enum TypedVec<'a> {
 
 #[derive(Debug)]
 pub struct Header<'a> {
-    meta: HashMap<&'a str, &'a str>,
-    info: Vec<HeaderInfo<'a>>,
+    pub(crate) meta: HashMap<&'a str, &'a str>,
+    pub(crate) info: Vec<HeaderInfo<'a>>,
 }
 
 pub type HeaderKey<'a> = &'a str;
