@@ -19,7 +19,7 @@ pub struct BcfRecord {
     pub(crate) qual: Option<f32>,
     pub(crate) filter: Vec<i32>, // pointer into header dict
     pub(crate) info: Vec<(InfoKey, TypedVec)>,
-    pub(crate) format: Option<(FormatKey, TypedVec)>,
+    pub(crate) format: Option<Vec<(FormatKey, Vec<TypedVec>)>>,
 }
 
 #[repr(C)]

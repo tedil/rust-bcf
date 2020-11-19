@@ -12,7 +12,7 @@ use nom::character::streaming::{alpha1, alphanumeric1, multispace0, none_of};
 use nom::character::streaming::{anychar, digit1};
 use nom::combinator::{complete, eof, map, opt, recognize};
 use nom::lib::std::str::Utf8Error;
-use nom::multi::{many0, many1, many_m_n, separated_list0};
+use nom::multi::{many0, many1, many_m_n, many_till, separated_list0};
 use nom::sequence::{delimited, preceded, separated_pair, terminated};
 use nom::{
     bytes::streaming::{tag, take, take_while_m_n},
@@ -23,8 +23,8 @@ use nom::{
 };
 
 use crate::types::{
-    BcfRecord, HeaderKey, HeaderValue, InfoKey, InfoNumber, InfoType, TypeDescriptor, TypeKind,
-    TypedVec, Version,
+    BcfRecord, Header, HeaderKey, HeaderValue, InfoKey, InfoNumber, InfoType, TypeDescriptor,
+    TypeKind, TypedVec, Version,
 };
 
 fn bcf_version(input: &[u8]) -> IResult<&[u8], Version> {
@@ -80,6 +80,27 @@ fn read_string(length: usize, input: &[u8]) -> IResult<&[u8], String> {
     Ok((input, String::from_utf8(string.to_vec()).unwrap()))
 }
 
+fn typed_int(input: &[u8]) -> IResult<&[u8], usize> {
+    let (input, TypeDescriptor { kind, num_elements }) = type_descriptor(input)?;
+    assert_eq!(num_elements, 1);
+    let (input, value) = match kind {
+        TypeKind::Int8 => {
+            let (input, val) = le_i8(input)?;
+            (input, val as usize)
+        }
+        TypeKind::Int16 => {
+            let (input, val) = le_i16(input)?;
+            (input, val as usize)
+        }
+        TypeKind::Int32 => {
+            let (input, val) = le_i32(input)?;
+            (input, val as usize)
+        }
+        x => panic!("Expected typed int, got {:?}", x),
+    };
+    Ok((input, value))
+}
+
 fn typed_int8s(input: &[u8]) -> IResult<&[u8], Vec<i8>> {
     let (input, TypeDescriptor { kind, num_elements }) = type_descriptor(input)?;
     assert_eq!(kind, TypeKind::Int8);
@@ -111,9 +132,12 @@ fn typed_f32s(input: &[u8]) -> IResult<&[u8], Vec<f32>> {
     Ok((input, data))
 }
 
-fn typed_vec(input: &[u8]) -> IResult<&[u8], TypedVec> {
-    let (input, TypeDescriptor { kind, num_elements }) = type_descriptor(input)?;
-    let (input, vec) = match kind {
+fn typed_vec_from_td<'a, 'b>(
+    type_descriptor: &'b TypeDescriptor,
+    input: &'a [u8],
+) -> IResult<&'a [u8], TypedVec> {
+    let num_elements = type_descriptor.num_elements;
+    let (input, vec) = match type_descriptor.kind {
         TypeKind::Missing => (input, TypedVec::Missing),
         TypeKind::Int8 => {
             let (input, data) = many_m_n(num_elements, num_elements, le_i8)(input)?;
@@ -149,6 +173,11 @@ fn typed_vec(input: &[u8]) -> IResult<&[u8], TypedVec> {
     Ok((input, vec))
 }
 
+fn typed_vec(input: &[u8]) -> IResult<&[u8], TypedVec> {
+    let (input, type_descriptor) = type_descriptor(input)?;
+    typed_vec_from_td(&type_descriptor, input)
+}
+
 fn info_pair(input: &[u8]) -> IResult<&[u8], (InfoKey, TypedVec)> {
     let (input, type_descriptor) = type_descriptor(input)?;
     assert_eq!(type_descriptor.num_elements, 1);
@@ -176,6 +205,22 @@ fn info(n_info: i16, input: &[u8]) -> IResult<&[u8], Vec<(InfoKey, TypedVec)>> {
     many_m_n(n_info, n_info, info_pair)(input)
 }
 
+type FormatKey = usize;
+
+fn genotype_field(n_sample: u32, input: &[u8]) -> IResult<&[u8], (usize, Vec<TypedVec>)> {
+    let n_sample = n_sample as usize;
+    let (input, fmt_key_offset) = typed_int(input)?;
+    let (input, data_type) = type_descriptor(input)?;
+    let mut input = input;
+    let mut sample_values = Vec::with_capacity(n_sample);
+    for _ in 0..n_sample {
+        let r = typed_vec_from_td(&data_type, input)?;
+        input = r.0;
+        sample_values.push(r.1);
+    }
+    Ok((input, (fmt_key_offset as FormatKey, sample_values)))
+}
+
 fn record(input: &[u8]) -> IResult<&[u8], BcfRecord> {
     let (input, (l_shared, l_indiv, chrom, pos, rlen, qual, n_info, n_allele, n_sample, n_fmt)) =
         tuple((
@@ -187,6 +232,14 @@ fn record(input: &[u8]) -> IResult<&[u8], BcfRecord> {
         typed_int32s,
     ))(input)?;
     let (input, info) = info(n_info, input)?;
+    let (input, format) = if l_indiv > 0 {
+        let (input, format) = many_m_n(n_fmt as usize, n_fmt as usize, |d| {
+            genotype_field(n_sample, d)
+        })(input)?;
+        (input, Some(format))
+    } else {
+        (input, None)
+    };
     Ok((
         input,
         BcfRecord {
@@ -207,7 +260,7 @@ fn record(input: &[u8]) -> IResult<&[u8], BcfRecord> {
             },
             filter: filters,
             info,
-            format: None,
+            format,
         },
     ))
 }
@@ -314,23 +367,19 @@ fn header_entry(input: &[u8]) -> IResult<&[u8], (HeaderKey, HeaderValue)> {
         }
         _ => HeaderValue::String(std::str::from_utf8(value).unwrap()),
     };
-    // dbg!(&key, &value);
     Ok((input, (key, value)))
 }
 
 fn header(header_length: u32, input: &[u8]) -> IResult<&[u8], &[u8]> {
     let (input, header) = take(header_length)(input)?;
-    // let foo = std::str::from_utf8(header).unwrap().split("\n").collect_vec();
-    // dbg!(&foo);
     let (header, entries) = many0(header_entry)(header)?;
-    dbg!(entries);
     Ok((input, header))
 }
 
-pub fn parse(input: &[u8]) -> Result<BcfRecord> {
+pub fn parse(input: &[u8]) -> Result<Vec<BcfRecord>> {
     let (input, version) = bcf_version(input).unwrap();
     let (input, header_length) = header_length(input).unwrap();
     let (input, header) = header(header_length, input).unwrap();
-    let (input, record) = record(input).unwrap();
-    Ok(record)
+    let (input, records) = many_till(record, eof)(input).unwrap();
+    Ok(records.0)
 }
