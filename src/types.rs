@@ -1,10 +1,12 @@
 use std::borrow::Cow;
 
+use multimap::MultiMap;
+use nom::lib::std::collections::HashMap;
 use num_enum::TryFromPrimitive;
+use std::str::FromStr;
 use strum::EnumString;
 
-use crate::parser::{HeaderContig, HeaderFilter, HeaderFormat, HeaderInfo};
-use multimap::MultiMap;
+use crate::parser;
 
 const MISSING_QUAL: f32 = 0x7F800001 as f32;
 
@@ -97,4 +99,98 @@ pub enum HeaderValue<'a> {
     Filter(HeaderFilter<'a>),
     Format(HeaderFormat<'a>),
     Contig(HeaderContig<'a>),
+}
+
+#[derive(Debug)]
+pub struct HeaderInfo<'a> {
+    id: &'a str,
+    number: InfoNumber,
+    kind: InfoType,
+    description: &'a str,
+    // may be empty
+    source: &'a str,
+    // may be empty
+    version: &'a str,
+    idx: usize,
+    additional: HashMap<&'a str, &'a str>,
+}
+
+impl<'a> From<Vec<(&'a str, &'a str)>> for HeaderInfo<'a> {
+    fn from(data: Vec<(&'a str, &'a str)>) -> Self {
+        let mut h: HashMap<_, _> = data.into_iter().collect();
+        let mut header_info = HeaderInfo {
+            id: h.remove("ID").expect("ID is mandatory"),
+            number: parser::info_number(h.remove("Number").expect("Number is mandatory"))
+                .unwrap()
+                .1,
+            kind: InfoType::from_str(h.remove("Type").expect("Type is mandatory")).unwrap(),
+            description: h.remove("Description").expect("Description is mandatory"),
+            source: h.remove("Source").unwrap_or(&""),
+            version: h.remove("Version").unwrap_or(&""),
+            idx: str::parse(h.remove("IDX").unwrap_or(&"0")).unwrap(),
+            additional: Default::default(),
+        };
+        header_info.additional = h;
+        header_info
+    }
+}
+
+#[derive(Debug)]
+pub struct HeaderFormat<'a> {
+    id: &'a str,
+    number: InfoNumber,
+    kind: InfoType,
+    description: &'a str,
+    idx: usize,
+}
+
+impl<'a> From<Vec<(&'a str, &'a str)>> for HeaderFormat<'a> {
+    fn from(data: Vec<(&'a str, &'a str)>) -> Self {
+        let mut h: HashMap<_, _> = data.into_iter().collect();
+        HeaderFormat {
+            id: h.remove("ID").expect("ID is mandatory"),
+            number: parser::info_number(h.remove("Number").expect("Number is mandatory"))
+                .unwrap()
+                .1,
+            kind: InfoType::from_str(h.remove("Type").expect("Type is mandatory")).unwrap(),
+            description: h.remove("Description").expect("Description is mandatory"),
+            idx: str::parse(h.remove("IDX").unwrap_or(&"0")).unwrap(),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct HeaderContig<'a> {
+    id: &'a str,
+    length: Option<usize>,
+    additional: HashMap<&'a str, &'a str>,
+}
+
+impl<'a> From<Vec<(&'a str, &'a str)>> for HeaderContig<'a> {
+    fn from(data: Vec<(&'a str, &'a str)>) -> Self {
+        let mut h: HashMap<_, _> = data.into_iter().collect();
+        let mut header_info = HeaderContig {
+            id: h.remove("ID").expect("ID is mandatory"),
+            length: h.remove("length").map(|s| s.parse().ok()).flatten(),
+            additional: Default::default(),
+        };
+        header_info.additional = h;
+        header_info
+    }
+}
+
+#[derive(Debug)]
+pub struct HeaderFilter<'a> {
+    id: &'a str,
+    description: &'a str,
+}
+
+impl<'a> From<Vec<(&'a str, &'a str)>> for HeaderFilter<'a> {
+    fn from(data: Vec<(&'a str, &'a str)>) -> Self {
+        let mut h: HashMap<_, _> = data.into_iter().collect();
+        HeaderFilter {
+            id: h.remove("ID").expect("ID is mandatory"),
+            description: h.remove("Description").expect("Description is mandatory"),
+        }
+    }
 }

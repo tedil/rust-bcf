@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::iter::FromIterator;
-use std::str::FromStr;
 
 use itertools::Itertools;
 use multimap::MultiMap;
@@ -20,8 +19,8 @@ use nom::{
 };
 
 use crate::types::{
-    BcfRecord, Header, HeaderKey, HeaderValue, InfoKey, InfoNumber, InfoType, TypeDescriptor,
-    TypeKind, TypedVec, Version,
+    BcfRecord, Header, HeaderContig, HeaderFilter, HeaderFormat, HeaderInfo, HeaderKey,
+    HeaderValue, InfoKey, InfoNumber, TypeDescriptor, TypeKind, TypedVec, Version,
 };
 
 fn bcf_version(input: &[u8]) -> IResult<&[u8], Version> {
@@ -209,11 +208,15 @@ fn genotype_field(n_sample: u32, input: &[u8]) -> IResult<&[u8], (usize, Vec<Typ
     Ok((input, (fmt_key_offset as FormatKey, sample_values)))
 }
 
+fn record_length(input: &[u8]) -> IResult<&[u8], (u32, u32)> {
+    tuple((le_u32, le_u32))(input)
+}
+
 fn record<'a>(_header: &Header<'a>, input: &'a [u8]) -> IResult<&'a [u8], BcfRecord<'a>> {
-    let (input, (_l_shared, l_indiv, chrom, pos, _rlen, qual, n_info, n_allele, n_sample, n_fmt)) =
-        tuple((
-            le_u32, le_u32, le_i32, le_i32, le_i32, le_f32, le_i16, le_i16, le_u24, le_u8,
-        ))(input)?;
+    let (input, (l_shared, l_indiv)) = record_length(input)?;
+    let (input, (chrom, pos, _rlen, qual, n_info, n_allele, n_sample, n_fmt)) = tuple((
+        le_i32, le_i32, le_i32, le_f32, le_i16, le_i16, le_u24, le_u8,
+    ))(input)?;
     let (input, id) = typed_string(input)?;
     let (input, (alleles, filters)) = tuple((
         many_m_n(n_allele as usize, n_allele as usize, typed_string),
@@ -258,7 +261,7 @@ fn parse_usize(input: &str) -> usize {
     input.parse().unwrap()
 }
 
-fn info_number(input: &str) -> IResult<&str, InfoNumber> {
+pub(crate) fn info_number(input: &str) -> IResult<&str, InfoNumber> {
     let r: IResult<&str, usize> = map(nom::character::complete::digit1, parse_usize)(input);
     if let Ok((input, number)) = r {
         Ok((input, InfoNumber::Count(number)))
@@ -272,100 +275,6 @@ fn info_number(input: &str) -> IResult<&str, InfoNumber> {
             x => panic!("Unknown Number type {}", x),
         };
         Ok((input, number))
-    }
-}
-
-#[derive(Debug)]
-pub struct HeaderInfo<'a> {
-    id: &'a str,
-    number: InfoNumber,
-    kind: InfoType,
-    description: &'a str,
-    // may be empty
-    source: &'a str,
-    // may be empty
-    version: &'a str,
-    idx: usize,
-    additional: HashMap<&'a str, &'a str>,
-}
-
-impl<'a> From<Vec<(&'a str, &'a str)>> for HeaderInfo<'a> {
-    fn from(data: Vec<(&'a str, &'a str)>) -> Self {
-        let mut h: HashMap<_, _> = data.into_iter().collect();
-        let mut header_info = HeaderInfo {
-            id: h.remove("ID").expect("ID is mandatory"),
-            number: info_number(h.remove("Number").expect("Number is mandatory"))
-                .unwrap()
-                .1,
-            kind: InfoType::from_str(h.remove("Type").expect("Type is mandatory")).unwrap(),
-            description: h.remove("Description").expect("Description is mandatory"),
-            source: h.remove("Source").unwrap_or(&""),
-            version: h.remove("Version").unwrap_or(&""),
-            idx: str::parse(h.remove("IDX").unwrap_or(&"0")).unwrap(),
-            additional: Default::default(),
-        };
-        header_info.additional = h;
-        header_info
-    }
-}
-
-#[derive(Debug)]
-pub struct HeaderFormat<'a> {
-    id: &'a str,
-    number: InfoNumber,
-    kind: InfoType,
-    description: &'a str,
-    idx: usize,
-}
-
-impl<'a> From<Vec<(&'a str, &'a str)>> for HeaderFormat<'a> {
-    fn from(data: Vec<(&'a str, &'a str)>) -> Self {
-        let mut h: HashMap<_, _> = data.into_iter().collect();
-        HeaderFormat {
-            id: h.remove("ID").expect("ID is mandatory"),
-            number: info_number(h.remove("Number").expect("Number is mandatory"))
-                .unwrap()
-                .1,
-            kind: InfoType::from_str(h.remove("Type").expect("Type is mandatory")).unwrap(),
-            description: h.remove("Description").expect("Description is mandatory"),
-            idx: str::parse(h.remove("IDX").unwrap_or(&"0")).unwrap(),
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct HeaderContig<'a> {
-    id: &'a str,
-    length: Option<usize>,
-    additional: HashMap<&'a str, &'a str>,
-}
-
-impl<'a> From<Vec<(&'a str, &'a str)>> for HeaderContig<'a> {
-    fn from(data: Vec<(&'a str, &'a str)>) -> Self {
-        let mut h: HashMap<_, _> = data.into_iter().collect();
-        let mut header_info = HeaderContig {
-            id: h.remove("ID").expect("ID is mandatory"),
-            length: h.remove("length").map(|s| s.parse().ok()).flatten(),
-            additional: Default::default(),
-        };
-        header_info.additional = h;
-        header_info
-    }
-}
-
-#[derive(Debug)]
-pub struct HeaderFilter<'a> {
-    id: &'a str,
-    description: &'a str,
-}
-
-impl<'a> From<Vec<(&'a str, &'a str)>> for HeaderFilter<'a> {
-    fn from(data: Vec<(&'a str, &'a str)>) -> Self {
-        let mut h: HashMap<_, _> = data.into_iter().collect();
-        HeaderFilter {
-            id: h.remove("ID").expect("ID is mandatory"),
-            description: h.remove("Description").expect("Description is mandatory"),
-        }
     }
 }
 
