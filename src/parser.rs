@@ -18,10 +18,17 @@ use nom::{
     IResult,
 };
 
+use crate::record::BcfRecord;
 use crate::types::{
-    BcfRecord, Header, HeaderContig, HeaderFilter, HeaderFormat, HeaderInfo, HeaderKey,
-    HeaderValue, InfoKey, InfoNumber, TypeDescriptor, TypeKind, TypedVec, Version,
+    Header, HeaderContig, HeaderFilter, HeaderFormat, HeaderInfo, HeaderKey, HeaderValue, InfoKey,
+    InfoNumber, Text, TypeDescriptor, TypeKind, TypedVec, Version,
 };
+use nom::lib::std::collections::hash_map::RandomState;
+use std::fs::File;
+use std::io::{BufRead, BufReader, Read};
+use std::mem::size_of;
+use std::path::Path;
+use std::rc::Rc;
 
 fn bcf_version(input: &[u8]) -> IResult<&[u8], Version> {
     let (input, _bcf) = tag(b"BCF")(input)?;
@@ -72,11 +79,11 @@ fn type_descriptor(input: &[u8]) -> IResult<&[u8], TypeDescriptor> {
     ))
 }
 
-fn typed_string(input: &[u8]) -> IResult<&[u8], &str> {
+fn typed_string(input: &[u8]) -> IResult<&[u8], Text> {
     let (input, TypeDescriptor { kind, num_elements }) = type_descriptor(input)?;
     assert_eq!(kind, TypeKind::String);
     let (input, string) = take(num_elements)(input)?;
-    Ok((input, std::str::from_utf8(string).unwrap()))
+    Ok((input, string.into()))
 }
 
 fn typed_int(input: &[u8]) -> IResult<&[u8], usize> {
@@ -120,31 +127,26 @@ fn typed_ints(input: &[u8]) -> IResult<&[u8], Vec<usize>> {
 fn typed_vec_from_td<'a, 'b>(
     type_descriptor: &'b TypeDescriptor,
     input: &'a [u8],
-) -> IResult<&'a [u8], TypedVec<'a>> {
+) -> IResult<&'a [u8], TypedVec> {
     let num_elements = type_descriptor.num_elements;
     let (input, vec) = match type_descriptor.kind {
         TypeKind::Missing => (input, TypedVec::Missing),
         TypeKind::Int8 => {
-            let (input, data) = many_m_n(num_elements, num_elements, le_i8)(input)?;
-            (input, TypedVec::Int8(data))
+            let (input, data) = many_m_n(num_elements, num_elements, map(le_i8, i32::from))(input)?;
+            (input, TypedVec::Int32(data))
         }
         TypeKind::Int16 => {
-            let (input, data) = many_m_n(num_elements, num_elements, le_i16)(input)?;
-            (input, TypedVec::Int16(data))
+            let (input, data) =
+                many_m_n(num_elements, num_elements, map(le_i16, i32::from))(input)?;
+            (input, TypedVec::Int32(data))
         }
         TypeKind::Int32 => {
             let (input, data) = many_m_n(num_elements, num_elements, le_i32)(input)?;
             (input, TypedVec::Int32(data))
         }
-        TypeKind::Reserved4 => {
-            unimplemented!()
-        }
         TypeKind::Float32 => {
             let (input, data) = many_m_n(num_elements, num_elements, le_f32)(input)?;
             (input, TypedVec::Float32(data))
-        }
-        TypeKind::Reserved6 => {
-            unimplemented!()
         }
         TypeKind::String => {
             // let (input, data) = many_m_n(num_elements, num_elements, le_u8)(input)?;
@@ -153,7 +155,7 @@ fn typed_vec_from_td<'a, 'b>(
             (
                 input,
                 // TypedVec::String(data.split(',').map(str::to_owned).collect_vec()),
-                TypedVec::String(String::from_utf8_lossy(&data)),
+                TypedVec::UString(data.into()),
             )
         }
     };
@@ -212,8 +214,12 @@ fn record_length(input: &[u8]) -> IResult<&[u8], (u32, u32)> {
     tuple((le_u32, le_u32))(input)
 }
 
-fn record<'a>(_header: &Header<'a>, input: &'a [u8]) -> IResult<&'a [u8], BcfRecord<'a>> {
-    let (input, (l_shared, l_indiv)) = record_length(input)?;
+fn record_from_length(
+    l_shared: u32,
+    l_indiv: u32,
+    header: Rc<Header>,
+    input: &[u8],
+) -> IResult<&[u8], BcfRecord> {
     let (input, (chrom, pos, _rlen, qual, n_info, n_allele, n_sample, n_fmt)) = tuple((
         le_i32, le_i32, le_i32, le_f32, le_i16, le_i16, le_u24, le_u8,
     ))(input)?;
@@ -237,7 +243,7 @@ fn record<'a>(_header: &Header<'a>, input: &'a [u8]) -> IResult<&'a [u8], BcfRec
             chrom: chrom as u32,
             pos: pos as u32,
             id: Some(id),
-            ref_allele: alleles[0],
+            ref_allele: alleles[0].clone(),
             alt_alleles: if alleles.len() > 1 {
                 alleles[1..].to_vec()
             } else {
@@ -252,9 +258,14 @@ fn record<'a>(_header: &Header<'a>, input: &'a [u8]) -> IResult<&'a [u8], BcfRec
             filter: filters,
             info,
             format,
-            header: None,
+            header: header.clone(),
         },
     ))
+}
+
+fn _record(header: Rc<Header>, input: &[u8]) -> IResult<&[u8], BcfRecord> {
+    let (input, (l_shared, l_indiv)) = record_length(input)?;
+    record_from_length(l_shared, l_indiv, header, input)
 }
 
 fn parse_usize(input: &str) -> usize {
@@ -335,7 +346,7 @@ fn header_entry(input: &[u8]) -> IResult<&[u8], (HeaderKey, HeaderValue)> {
             let data = delimited(tag("<"), header_value_mapping, tag(">"))(value)?.1;
             HeaderValue::Filter(HeaderFilter::from(data.into_iter().collect_vec()))
         }
-        _ => HeaderValue::String(std::str::from_utf8(value).unwrap()),
+        _ => HeaderValue::String(std::str::from_utf8(value).unwrap().into()),
     };
     Ok((input, (key, value)))
 }
@@ -343,19 +354,23 @@ fn header_entry(input: &[u8]) -> IResult<&[u8], (HeaderKey, HeaderValue)> {
 fn header(header_length: u32, input: &[u8]) -> IResult<&[u8], Header> {
     let (input, header) = take(header_length)(input)?;
     let (_header, entries) = many0(header_entry)(header)?;
-    let mut entries = MultiMap::from_iter(entries);
+    let mut entries = MultiMap::from_iter(entries.into_iter().map(|(k, v)| (k.into(), v)));
     let info = entries.remove("INFO").unwrap_or_else(Vec::new);
     let format = entries.remove("FORMAT").unwrap_or_else(Vec::new);
     let contigs = entries.remove("CONTIG").unwrap_or_else(Vec::new);
+
+    let info: HashMap<usize, HeaderInfo, RandomState> = info
+        .into_iter()
+        .filter_map(|v| match v {
+            HeaderValue::Info(info) => Some((info.idx, info)),
+            _ => None,
+        })
+        .collect();
+    let tag_to_offset = info.iter().map(|(idx, hi)| (hi.id.clone(), *idx)).collect();
     let header = Header {
         meta: entries,
-        info: info
-            .into_iter()
-            .filter_map(|v| match v {
-                HeaderValue::Info(info) => Some(info),
-                _ => None,
-            })
-            .collect(),
+        info,
+        tag_to_offset,
         contigs: contigs
             .into_iter()
             .filter_map(|v| match v {
@@ -377,35 +392,62 @@ fn header(header_length: u32, input: &[u8]) -> IResult<&[u8], Header> {
 const BCF_MAJOR_VERSION: u8 = 2;
 const BCF_MINOR_VERSION: u8 = 2;
 
-pub fn parse(input: &[u8]) -> impl Iterator<Item = BcfRecord> + '_ {
-    let (input, version) = bcf_version(input).unwrap();
-    assert_eq!(version.major, BCF_MAJOR_VERSION);
-    assert_eq!(version.minor, BCF_MINOR_VERSION);
-    dbg!(version);
-    let (input, header_length) = header_length(input).unwrap();
-    dbg!(header_length);
-    let (input, header) = header(header_length, input).unwrap();
-    dbg!(&header);
+pub struct BcfRecords<R: Read> {
+    header: Rc<Header>,
+    length_buf: [u8; size_of::<u32>() * 2],
+    record_buf: Vec<u8>,
+    inner: R,
+}
 
-    struct BcfRecordsIterator<'a> {
-        input: &'a [u8],
-        header: Header<'a>,
+impl<R: Read> BcfRecords<R> {
+    pub fn header(&self) -> &Header {
+        self.header.as_ref()
     }
+}
 
-    impl<'a> Iterator for BcfRecordsIterator<'a> {
-        type Item = BcfRecord<'a>;
+impl BcfRecords<BufReader<File>> {
+    pub fn from_path<P: AsRef<Path>>(path: P) -> Self {
+        let f = File::open(path).unwrap();
+        let mut reader = BufReader::new(f);
+        let mut input = [0u8; 5];
+        reader.read_exact(&mut input).unwrap();
+        let (input, version) = bcf_version(&input).unwrap();
+        assert!(input.is_empty());
+        assert_eq!(version.major, BCF_MAJOR_VERSION);
+        assert_eq!(version.minor, BCF_MINOR_VERSION);
 
-        fn next(&mut self) -> Option<Self::Item> {
-            if !self.input.is_empty() {
-                let (inp, rec) = record(&self.header, self.input).unwrap();
-                self.input = inp;
-                Some(rec)
-            } else {
-                None
-            }
+        let mut input = [0u8; size_of::<u32>()];
+        reader.read_exact(&mut input).unwrap();
+        let (input, header_length) = header_length(&input).unwrap();
+        assert!(input.is_empty());
+
+        let mut input = vec![0u8; header_length as usize];
+        reader.read_exact(&mut input).unwrap();
+        let (input, header) = header(header_length, &input).unwrap();
+        assert!(input.is_empty());
+
+        Self {
+            header: Rc::new(header),
+            length_buf: [0u8; size_of::<u32>() * 2],
+            record_buf: Vec::new(),
+            inner: reader,
         }
     }
-    // let (input, records) = many_till(record, eof)(input).unwrap();
-    // Ok(records.0)
-    BcfRecordsIterator { input, header }
+}
+
+impl<R: BufRead> Iterator for BcfRecords<R> {
+    type Item = BcfRecord;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.inner.read_exact(&mut self.length_buf).is_err() {
+            return None;
+        };
+        let (_, (l_shared, l_indiv)) = record_length(&self.length_buf).unwrap();
+        self.record_buf
+            .resize(l_shared as usize + l_indiv as usize, 0);
+        self.inner.read_exact(&mut self.record_buf).unwrap();
+        let (_, record) =
+            record_from_length(l_shared, l_indiv, self.header.clone(), &self.record_buf).unwrap();
+        Some(record)
+    }
 }

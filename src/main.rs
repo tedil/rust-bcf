@@ -1,26 +1,25 @@
-use std::io::{BufReader, Read};
-
 use anyhow::Result;
 // use bgzip::BGZFReader;
 use counter::Counter;
 use itertools::Itertools;
 
-use crate::parser::parse;
+// use crate::parser::parse;
+use crate::parser::BcfRecords;
 
 mod parser;
+mod record;
 mod types;
 
 fn main() -> Result<()> {
     let path = &std::env::args().collect_vec()[1];
-    // let mut reader = BGZFReader::new(std::fs::File::open(path)?);
-    let mut reader = BufReader::new(std::fs::File::open(path)?);
-    let mut buffer = Vec::with_capacity(5000);
-    let num_bytes = reader.read_to_end(&mut buffer)?;
-    dbg!(num_bytes);
-    let records = parse(&buffer);
-    let counts: Counter<_> = records.map(|record| record.ref_allele).collect();
-    dbg!(&counts.most_common_ordered()[..10]);
+    let records = BcfRecords::from_path(path);
+    let header = records.header();
+    dbg!(&header);
+    let counts: Counter<_> = records
+        .map(|record| record.ref_allele().len())
+        // .map(|record| record.info(b"platforms").integer().unwrap()[0])
+        .collect();
+    dbg!(&counts.most_common_ordered()[..]);
 
-    // dbg!(&records);
     Ok(())
 }
