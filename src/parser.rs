@@ -111,15 +111,9 @@ fn typed_ints(input: &[u8]) -> IResult<&[u8], Vec<usize>> {
     let (input, TypeDescriptor { kind, num_elements }) = type_descriptor(input)?;
     match kind {
         TypeKind::Missing => Ok((input, vec![])),
-        TypeKind::Int32 => map(many_m_n(num_elements, num_elements, le_i32), |v| {
-            v.into_iter().map(|s| s as usize).collect()
-        })(input),
-        TypeKind::Int16 => map(many_m_n(num_elements, num_elements, le_i16), |v| {
-            v.into_iter().map(|s| s as usize).collect()
-        })(input),
-        TypeKind::Int8 => map(many_m_n(num_elements, num_elements, le_i8), |v| {
-            v.into_iter().map(|s| s as usize).collect()
-        })(input),
+        TypeKind::Int32 => many_m_n(num_elements, num_elements, map(le_i32, |v| v as usize))(input),
+        TypeKind::Int16 => many_m_n(num_elements, num_elements, map(le_i16, |v| v as usize))(input),
+        TypeKind::Int8 => many_m_n(num_elements, num_elements, map(le_i8, |v| v as usize))(input),
         other => panic!("Unsupported FILTER type: {:?}", other),
     }
 }
