@@ -30,6 +30,8 @@ use std::mem::size_of;
 use std::path::Path;
 use std::rc::Rc;
 
+/// The first 5 bytes in a BCF file are b"BCF" followed by two bytes
+/// which encode major and minor version.
 fn bcf_version(input: &[u8]) -> IResult<&[u8], Version> {
     let (input, _bcf) = tag(b"BCF")(input)?;
     let (input, major) = le_u8(input)?;
@@ -37,12 +39,16 @@ fn bcf_version(input: &[u8]) -> IResult<&[u8], Version> {
     Ok((input, Version { major, minor }))
 }
 
+/// The length of the header follows directly after `bcf_version`
+/// and is encoded as a 32bit unsigned integer
 fn header_length(input: &[u8]) -> IResult<&[u8], u32> {
     let (input, length) = le_u32(input)?;
     Ok((input, length))
 }
 
-fn read_int(kind: TypeKind, input: &[u8]) -> IResult<&[u8], usize> {
+/// This is a convenience function for reading either of `u8`, `u16` and `u32`
+/// while returning a `usize` suitable for indexing purposes
+fn read_uint(kind: TypeKind, input: &[u8]) -> IResult<&[u8], usize> {
     assert!(kind == TypeKind::Int8 || kind == TypeKind::Int16 || kind == TypeKind::Int32);
     match kind {
         TypeKind::Int8 => map(le_u8, |v| v as usize)(input),
@@ -52,6 +58,12 @@ fn read_int(kind: TypeKind, input: &[u8]) -> IResult<&[u8], usize> {
     }
 }
 
+/// A `TypeDescriptor` consists of:
+/// - a single byte, where the lower 4 bits encode the type (see `TypeKind`),
+///   and the upper 4 bits encode the number of elements (of that type) that follow
+/// - if the number of elements is `0b1111` (i.e. 15), read another TypeDescriptor
+///   which should describe a single integer and read its associated value
+///   which gives the *actual* number of elements
 fn type_descriptor(input: &[u8]) -> IResult<&[u8], TypeDescriptor> {
     let (input, type_descriptor_byte) = le_u8(input)?;
     let type_kind = type_descriptor_byte & 0b1111;
@@ -65,7 +77,7 @@ fn type_descriptor(input: &[u8]) -> IResult<&[u8], TypeDescriptor> {
             },
         ) = type_descriptor(input)?;
         assert_eq!(num_num_elements_ints, 1);
-        let (input, num_elements) = read_int(int, input)?;
+        let (input, num_elements) = read_uint(int, input)?;
         (input, num_elements as usize)
     } else {
         (input, num_elements as usize)
@@ -79,6 +91,7 @@ fn type_descriptor(input: &[u8]) -> IResult<&[u8], TypeDescriptor> {
     ))
 }
 
+/// A "typed string" is just a sequence of characters/bytes
 fn typed_string(input: &[u8]) -> IResult<&[u8], Text> {
     let (input, TypeDescriptor { kind, num_elements }) = type_descriptor(input)?;
     assert_eq!(kind, TypeKind::String);
@@ -86,6 +99,9 @@ fn typed_string(input: &[u8]) -> IResult<&[u8], Text> {
     Ok((input, string.into()))
 }
 
+/// Similar to `read_uint`, but: We're reading *signed* integers here, which are subsequently used
+/// as a *positive* offset into the header dictionary. I found no explanation as to why this choice
+/// was made in the BCF specs.
 fn typed_int(input: &[u8]) -> IResult<&[u8], usize> {
     let (input, TypeDescriptor { kind, num_elements }) = type_descriptor(input)?;
     assert_eq!(num_elements, 1);
@@ -107,6 +123,7 @@ fn typed_int(input: &[u8]) -> IResult<&[u8], usize> {
     Ok((input, value))
 }
 
+/// Read a vector of ints, again to be used as positive offsets; only used in the context of FILTER.
 fn typed_ints(input: &[u8]) -> IResult<&[u8], Vec<usize>> {
     let (input, TypeDescriptor { kind, num_elements }) = type_descriptor(input)?;
     match kind {
@@ -118,6 +135,7 @@ fn typed_ints(input: &[u8]) -> IResult<&[u8], Vec<usize>> {
     }
 }
 
+/// Reads the values described by `type_descriptor` and returns a `TypedVec` containing those values.
 fn typed_vec_from_td<'a, 'b>(
     type_descriptor: &'b TypeDescriptor,
     input: &'a [u8],
@@ -156,11 +174,13 @@ fn typed_vec_from_td<'a, 'b>(
     Ok((input, vec))
 }
 
+/// First reads a `TypeDescriptor`, then the value(s) described by this type descriptor.
 fn typed_vec(input: &[u8]) -> IResult<&[u8], TypedVec> {
     let (input, type_descriptor) = type_descriptor(input)?;
     typed_vec_from_td(&type_descriptor, input)
 }
 
+/// Reads a `(InfoKey, TypedVec)` pair.
 fn info_pair(input: &[u8]) -> IResult<&[u8], (InfoKey, TypedVec)> {
     let (input, type_descriptor) = type_descriptor(input)?;
     assert_eq!(type_descriptor.num_elements, 1);
@@ -183,6 +203,7 @@ fn info_pair(input: &[u8]) -> IResult<&[u8], (InfoKey, TypedVec)> {
     Ok((input, (info_key_offset, data)))
 }
 
+/// Reads all INFO entries for a record
 fn info(n_info: i16, input: &[u8]) -> IResult<&[u8], Vec<(InfoKey, TypedVec)>> {
     let n_info = n_info as usize;
     many_m_n(n_info, n_info, info_pair)(input)
@@ -204,10 +225,15 @@ fn genotype_field(n_sample: u32, input: &[u8]) -> IResult<&[u8], (usize, Vec<Typ
     Ok((input, (fmt_key_offset as FormatKey, sample_values)))
 }
 
+/// A record's length in bytes is given via the first two `u32`s, the first of which
+/// is `l_shared`, i.e. the number of bytes used for storing everything from `CHROM` to the end of
+/// `INFO`, the second of which is `l_indiv` which corresponds to the `FORMAT` entries.
 fn record_length(input: &[u8]) -> IResult<&[u8], (u32, u32)> {
     tuple((le_u32, le_u32))(input)
 }
 
+/// Given `l_shared` and `l_indiv`, read the actual data defining the record.
+/// Note that this actually parses everything (in contrast to htslib)
 fn record_from_length(
     l_shared: u32,
     l_indiv: u32,
@@ -257,15 +283,13 @@ fn record_from_length(
     ))
 }
 
-fn _record(header: Rc<Header>, input: &[u8]) -> IResult<&[u8], BcfRecord> {
-    let (input, (l_shared, l_indiv)) = record_length(input)?;
-    record_from_length(l_shared, l_indiv, header, input)
-}
+// -- functions for parsing the text header --
 
 fn parse_usize(input: &str) -> usize {
     input.parse().unwrap()
 }
 
+/// This parses the INFO number char to `InfoNumber`
 pub(crate) fn info_number(input: &str) -> IResult<&str, InfoNumber> {
     let r: IResult<&str, usize> = map(nom::character::complete::digit1, parse_usize)(input);
     if let Ok((input, number)) = r {
@@ -283,6 +307,7 @@ pub(crate) fn info_number(input: &str) -> IResult<&str, InfoNumber> {
     }
 }
 
+/// This reads a delimited string with `'\'` as the escape character.
 fn delimited_string(input: &[u8]) -> IResult<&[u8], &[u8]> {
     delimited(
         tag("\""),
@@ -291,6 +316,7 @@ fn delimited_string(input: &[u8]) -> IResult<&[u8], &[u8]> {
     )(input)
 }
 
+/// This reads `key=value` pairs (in the header)
 fn keys_and_values(input: &[u8]) -> IResult<&[u8], Vec<(&str, &str)>> {
     fn key_value(input: &[u8]) -> IResult<&[u8], (&str, &str)> {
         let (input, (key, value)) = separated_pair(
