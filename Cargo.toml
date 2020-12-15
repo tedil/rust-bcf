@@ -16,6 +16,9 @@ num_enum_derive = "0.5"
 strum = { version = "0.19", features = ["derive"] }
 counter = "0.5"
 multimap = "0.8"
+rust-htslib = "0.35"
+flate2 = "1.0"
+niffler = "2.3"
 
 [profile.release]
 lto = "fat"

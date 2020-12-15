@@ -18,12 +18,15 @@ use nom::{
     IResult,
 };
 
-use crate::record::BcfRecord;
+use crate::record::{BcfRecord, RawBcfRecord};
 use crate::types::{
     Header, HeaderContig, HeaderFilter, HeaderFormat, HeaderInfo, HeaderKey, HeaderValue, InfoKey,
     InfoNumber, Text, TypeDescriptor, TypeKind, TypedVec, Version,
 };
+use flate2::bufread::MultiGzDecoder;
 use nom::lib::std::collections::hash_map::RandomState;
+use std::error::Error;
+use std::ffi::OsStr;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read};
 use std::mem::size_of;
@@ -64,7 +67,7 @@ fn read_uint(kind: TypeKind, input: &[u8]) -> IResult<&[u8], usize> {
 /// - if the number of elements is `0b1111` (i.e. 15), read another TypeDescriptor
 ///   which should describe a single integer and read its associated value
 ///   which gives the *actual* number of elements
-fn type_descriptor(input: &[u8]) -> IResult<&[u8], TypeDescriptor> {
+pub(crate) fn type_descriptor(input: &[u8]) -> IResult<&[u8], TypeDescriptor> {
     let (input, type_descriptor_byte) = le_u8(input)?;
     let type_kind = type_descriptor_byte & 0b1111;
     let num_elements = (type_descriptor_byte >> 4) & 0b1111;
@@ -92,7 +95,7 @@ fn type_descriptor(input: &[u8]) -> IResult<&[u8], TypeDescriptor> {
 }
 
 /// A "typed string" is just a sequence of characters/bytes
-fn typed_string(input: &[u8]) -> IResult<&[u8], Text> {
+pub(crate) fn typed_string(input: &[u8]) -> IResult<&[u8], Text> {
     let (input, TypeDescriptor { kind, num_elements }) = type_descriptor(input)?;
     assert_eq!(kind, TypeKind::String);
     let (input, string) = take(num_elements)(input)?;
@@ -283,6 +286,20 @@ fn record_from_length(
     ))
 }
 
+fn raw_record_from_length(
+    l_shared: u32,
+    l_indiv: u32,
+    header: Rc<Header>,
+    input: &[u8],
+) -> IResult<&[u8], RawBcfRecord> {
+    let (shared, input) = input.split_at(l_shared as usize);
+    let (l_indiv, input) = input.split_at(l_indiv as usize);
+    Ok((
+        input,
+        RawBcfRecord::new(shared.to_vec(), l_indiv.to_vec(), header.clone()),
+    ))
+}
+
 // -- functions for parsing the text header --
 
 fn parse_usize(input: &str) -> usize {
@@ -377,7 +394,7 @@ fn header(header_length: u32, input: &[u8]) -> IResult<&[u8], Header> {
     let mut entries = MultiMap::from_iter(entries.into_iter().map(|(k, v)| (k.into(), v)));
     let info = entries.remove("INFO").unwrap_or_else(Vec::new);
     let format = entries.remove("FORMAT").unwrap_or_else(Vec::new);
-    let contigs = entries.remove("CONTIG").unwrap_or_else(Vec::new);
+    let contigs = entries.remove("contig").unwrap_or_else(Vec::new);
 
     let info: HashMap<usize, HeaderInfo, RandomState> = info
         .into_iter()
@@ -468,6 +485,72 @@ impl<R: BufRead> Iterator for BcfRecords<R> {
         self.inner.read_exact(&mut self.record_buf).unwrap();
         let (_, record) =
             record_from_length(l_shared, l_indiv, self.header.clone(), &self.record_buf).unwrap();
+        Some(record)
+    }
+}
+
+pub struct RawBcfRecords<R: Read> {
+    header: Rc<Header>,
+    length_buf: [u8; size_of::<u32>() * 2],
+    record_buf: Vec<u8>,
+    inner: Box<R>,
+}
+
+impl<R: Read> RawBcfRecords<R> {
+    pub fn header(&self) -> &Header {
+        self.header.as_ref()
+    }
+}
+
+impl RawBcfRecords<Box<dyn Read>> {
+    pub fn from_path<P: AsRef<Path>>(path: P) -> Result<Self, Box<dyn Error>> {
+        let (mut reader, _format) = niffler::from_path(path)?;
+        Self::new(reader)
+    }
+}
+
+impl<R: Read> RawBcfRecords<R> {
+    pub fn new(mut reader: R) -> Result<Self, Box<dyn Error>> {
+        let mut input = [0u8; 5];
+        reader.read_exact(&mut input)?;
+        let (input, version) = bcf_version(&input).unwrap();
+        assert!(input.is_empty());
+        assert_eq!(version.major, BCF_MAJOR_VERSION);
+        assert_eq!(version.minor, BCF_MINOR_VERSION);
+
+        let mut input = [0u8; size_of::<u32>()];
+        reader.read_exact(&mut input)?;
+        let (input, header_length) = header_length(&input).unwrap();
+        assert!(input.is_empty());
+
+        let mut input = vec![0u8; header_length as usize];
+        reader.read_exact(&mut input)?;
+        let (input, header) = header(header_length, &input).unwrap();
+        assert!(input.is_empty());
+
+        Ok(Self {
+            header: Rc::new(header),
+            length_buf: [0u8; size_of::<u32>() * 2],
+            record_buf: Vec::new(),
+            inner: Box::new(reader),
+        })
+    }
+}
+
+impl<R: Read> Iterator for RawBcfRecords<R> {
+    type Item = RawBcfRecord;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.inner.read_exact(&mut self.length_buf).is_err() {
+            return None;
+        };
+        let (_, (l_shared, l_indiv)) = record_length(&self.length_buf).unwrap();
+        self.record_buf
+            .resize(l_shared as usize + l_indiv as usize, 0);
+        self.inner.read_exact(&mut self.record_buf).unwrap();
+        let (_, record) =
+            raw_record_from_length(l_shared, l_indiv, self.header.clone(), &self.record_buf)
+                .unwrap();
         Some(record)
     }
 }

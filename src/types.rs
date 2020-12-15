@@ -154,7 +154,7 @@ impl<'a> From<Vec<(&'a str, &'a str)>> for HeaderFormat {
 
 #[derive(Debug)]
 pub struct HeaderContig {
-    id: String,
+    pub(crate) id: String,
     length: Option<usize>,
     additional: HashMap<String, String>,
 }
