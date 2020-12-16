@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::convert::TryFrom;
-use std::iter::FromIterator;
 
 use itertools::Itertools;
 use multimap::MultiMap;
@@ -23,19 +22,12 @@ use crate::types::{
     Header, HeaderContig, HeaderFilter, HeaderFormat, HeaderInfo, HeaderKey, HeaderValue, InfoKey,
     InfoNumber, Text, TypeDescriptor, TypeKind, TypedVec, Version,
 };
-use flate2::bufread::MultiGzDecoder;
 use nom::lib::std::collections::hash_map::RandomState;
-use std::error::Error;
-use std::ffi::OsStr;
-use std::fs::File;
-use std::io::{BufRead, BufReader, Read};
-use std::mem::size_of;
-use std::path::Path;
 use std::rc::Rc;
 
 /// The first 5 bytes in a BCF file are b"BCF" followed by two bytes
 /// which encode major and minor version.
-fn bcf_version(input: &[u8]) -> IResult<&[u8], Version> {
+pub(crate) fn bcf_version(input: &[u8]) -> IResult<&[u8], Version> {
     let (input, _bcf) = tag(b"BCF")(input)?;
     let (input, major) = le_u8(input)?;
     let (input, minor) = le_u8(input)?;
@@ -44,7 +36,7 @@ fn bcf_version(input: &[u8]) -> IResult<&[u8], Version> {
 
 /// The length of the header follows directly after `bcf_version`
 /// and is encoded as a 32bit unsigned integer
-fn header_length(input: &[u8]) -> IResult<&[u8], u32> {
+pub(crate) fn header_length(input: &[u8]) -> IResult<&[u8], u32> {
     let (input, length) = le_u32(input)?;
     Ok((input, length))
 }
@@ -127,7 +119,7 @@ fn typed_int(input: &[u8]) -> IResult<&[u8], usize> {
 }
 
 /// Read a vector of ints, again to be used as positive offsets; only used in the context of FILTER.
-fn typed_ints(input: &[u8]) -> IResult<&[u8], Vec<usize>> {
+pub(crate) fn typed_ints(input: &[u8]) -> IResult<&[u8], Vec<usize>> {
     let (input, TypeDescriptor { kind, num_elements }) = type_descriptor(input)?;
     match kind {
         TypeKind::Missing => Ok((input, vec![])),
@@ -231,13 +223,13 @@ fn genotype_field(n_sample: u32, input: &[u8]) -> IResult<&[u8], (usize, Vec<Typ
 /// A record's length in bytes is given via the first two `u32`s, the first of which
 /// is `l_shared`, i.e. the number of bytes used for storing everything from `CHROM` to the end of
 /// `INFO`, the second of which is `l_indiv` which corresponds to the `FORMAT` entries.
-fn record_length(input: &[u8]) -> IResult<&[u8], (u32, u32)> {
+pub(crate) fn record_length(input: &[u8]) -> IResult<&[u8], (u32, u32)> {
     tuple((le_u32, le_u32))(input)
 }
 
 /// Given `l_shared` and `l_indiv`, read the actual data defining the record.
 /// Note that this actually parses everything (in contrast to htslib)
-fn record_from_length(
+pub(crate) fn record_from_length(
     l_shared: u32,
     l_indiv: u32,
     header: Rc<Header>,
@@ -281,12 +273,12 @@ fn record_from_length(
             filter: filters,
             info,
             format,
-            header: header.clone(),
+            header,
         },
     ))
 }
 
-fn raw_record_from_length(
+pub(crate) fn raw_record_from_length(
     l_shared: u32,
     l_indiv: u32,
     header: Rc<Header>,
@@ -296,7 +288,7 @@ fn raw_record_from_length(
     let (l_indiv, input) = input.split_at(l_indiv as usize);
     Ok((
         input,
-        RawBcfRecord::new(shared.to_vec(), l_indiv.to_vec(), header.clone()),
+        RawBcfRecord::new(shared.to_vec(), l_indiv.to_vec(), header),
     ))
 }
 
@@ -388,10 +380,13 @@ fn header_entry(input: &[u8]) -> IResult<&[u8], (HeaderKey, HeaderValue)> {
     Ok((input, (key, value)))
 }
 
-fn header(header_length: u32, input: &[u8]) -> IResult<&[u8], Header> {
+pub(crate) fn header(header_length: u32, input: &[u8]) -> IResult<&[u8], Header> {
     let (input, header) = take(header_length)(input)?;
     let (_header, entries) = many0(header_entry)(header)?;
-    let mut entries = MultiMap::from_iter(entries.into_iter().map(|(k, v)| (k.into(), v)));
+    let mut entries = entries
+        .into_iter()
+        .map(|(k, v)| (k.into(), v))
+        .collect::<MultiMap<_, _>>();
     let info = entries.remove("INFO").unwrap_or_else(Vec::new);
     let format = entries.remove("FORMAT").unwrap_or_else(Vec::new);
     let contigs = entries.remove("contig").unwrap_or_else(Vec::new);
@@ -424,133 +419,4 @@ fn header(header_length: u32, input: &[u8]) -> IResult<&[u8], Header> {
             .collect(),
     };
     Ok((input, header))
-}
-
-const BCF_MAJOR_VERSION: u8 = 2;
-const BCF_MINOR_VERSION: u8 = 2;
-
-pub struct BcfRecords<R: Read> {
-    header: Rc<Header>,
-    length_buf: [u8; size_of::<u32>() * 2],
-    record_buf: Vec<u8>,
-    inner: R,
-}
-
-impl<R: Read> BcfRecords<R> {
-    pub fn header(&self) -> &Header {
-        self.header.as_ref()
-    }
-}
-
-impl BcfRecords<BufReader<File>> {
-    pub fn from_path<P: AsRef<Path>>(path: P) -> Self {
-        let f = File::open(path).unwrap();
-        let mut reader = BufReader::new(f);
-        let mut input = [0u8; 5];
-        reader.read_exact(&mut input).unwrap();
-        let (input, version) = bcf_version(&input).unwrap();
-        assert!(input.is_empty());
-        assert_eq!(version.major, BCF_MAJOR_VERSION);
-        assert_eq!(version.minor, BCF_MINOR_VERSION);
-
-        let mut input = [0u8; size_of::<u32>()];
-        reader.read_exact(&mut input).unwrap();
-        let (input, header_length) = header_length(&input).unwrap();
-        assert!(input.is_empty());
-
-        let mut input = vec![0u8; header_length as usize];
-        reader.read_exact(&mut input).unwrap();
-        let (input, header) = header(header_length, &input).unwrap();
-        assert!(input.is_empty());
-
-        Self {
-            header: Rc::new(header),
-            length_buf: [0u8; size_of::<u32>() * 2],
-            record_buf: Vec::new(),
-            inner: reader,
-        }
-    }
-}
-
-impl<R: BufRead> Iterator for BcfRecords<R> {
-    type Item = BcfRecord;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.inner.read_exact(&mut self.length_buf).is_err() {
-            return None;
-        };
-        let (_, (l_shared, l_indiv)) = record_length(&self.length_buf).unwrap();
-        self.record_buf
-            .resize(l_shared as usize + l_indiv as usize, 0);
-        self.inner.read_exact(&mut self.record_buf).unwrap();
-        let (_, record) =
-            record_from_length(l_shared, l_indiv, self.header.clone(), &self.record_buf).unwrap();
-        Some(record)
-    }
-}
-
-pub struct RawBcfRecords<R: Read> {
-    header: Rc<Header>,
-    length_buf: [u8; size_of::<u32>() * 2],
-    record_buf: Vec<u8>,
-    inner: Box<R>,
-}
-
-impl<R: Read> RawBcfRecords<R> {
-    pub fn header(&self) -> &Header {
-        self.header.as_ref()
-    }
-}
-
-impl RawBcfRecords<Box<dyn Read>> {
-    pub fn from_path<P: AsRef<Path>>(path: P) -> Result<Self, Box<dyn Error>> {
-        let (mut reader, _format) = niffler::from_path(path)?;
-        Self::new(reader)
-    }
-}
-
-impl<R: Read> RawBcfRecords<R> {
-    pub fn new(mut reader: R) -> Result<Self, Box<dyn Error>> {
-        let mut input = [0u8; 5];
-        reader.read_exact(&mut input)?;
-        let (input, version) = bcf_version(&input).unwrap();
-        assert!(input.is_empty());
-        assert_eq!(version.major, BCF_MAJOR_VERSION);
-        assert_eq!(version.minor, BCF_MINOR_VERSION);
-
-        let mut input = [0u8; size_of::<u32>()];
-        reader.read_exact(&mut input)?;
-        let (input, header_length) = header_length(&input).unwrap();
-        assert!(input.is_empty());
-
-        let mut input = vec![0u8; header_length as usize];
-        reader.read_exact(&mut input)?;
-        let (input, header) = header(header_length, &input).unwrap();
-        assert!(input.is_empty());
-
-        Ok(Self {
-            header: Rc::new(header),
-            length_buf: [0u8; size_of::<u32>() * 2],
-            record_buf: Vec::new(),
-            inner: Box::new(reader),
-        })
-    }
-}
-
-impl<R: Read> Iterator for RawBcfRecords<R> {
-    type Item = RawBcfRecord;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.inner.read_exact(&mut self.length_buf).is_err() {
-            return None;
-        };
-        let (_, (l_shared, l_indiv)) = record_length(&self.length_buf).unwrap();
-        self.record_buf
-            .resize(l_shared as usize + l_indiv as usize, 0);
-        self.inner.read_exact(&mut self.record_buf).unwrap();
-        let (_, record) =
-            raw_record_from_length(l_shared, l_indiv, self.header.clone(), &self.record_buf)
-                .unwrap();
-        Some(record)
-    }
 }

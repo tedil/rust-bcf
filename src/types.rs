@@ -5,7 +5,6 @@ use std::str::FromStr;
 use strum::EnumString;
 
 use crate::parser;
-use std::rc::Rc;
 
 const MISSING_QUAL: f32 = 0x7F800001 as f32;
 

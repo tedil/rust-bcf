@@ -1,26 +1,15 @@
-//
-// let (input, (chrom, pos, _rlen, qual, n_info, n_allele, n_sample, n_fmt)) = tuple((
-//         le_i32, le_i32, le_i32, le_f32, le_i16, le_i16, le_u24, le_u8,
-//     ))(input)?;
-//     let (input, id) = typed_string(input)?;
-//     let (input, (alleles, filters)) = tuple((
-//         many_m_n(n_allele as usize, n_allele as usize, typed_string),
-//         typed_ints,
-//     ))(input)?;
-//     let (input, info) = info(n_info, input)?;
 use std::mem::size_of;
+use std::ops::Range;
 use std::rc::Rc;
 
-use nom::error::ErrorKind;
+use nom::multi::many_m_n;
 use nom::number::streaming::{le_f32, le_i16, le_i32};
 use nom::IResult;
 
-use crate::parser::{type_descriptor, typed_string};
+use crate::parser::{type_descriptor, typed_ints, typed_string};
 use crate::types::{
     FormatKey, Header, HeaderValue, InfoKey, Text, TypeDescriptor, TypeKind, TypedVec,
 };
-use nom::multi::many_m_n;
-use std::ops::Range;
 
 pub trait Record {
     fn chrom(&self) -> &str;
@@ -78,6 +67,19 @@ impl RawBcfRecord {
         }
         n_alleles_from_shared(&self.shared).unwrap().1 as usize
     }
+
+    fn alleles(&self) -> (Vec<Text>, usize) {
+        let n_allele = self.n_alleles();
+        let start = self.allele_start_bytepos;
+        fn alleles_from_shared(shared: &[u8], n_allele: usize) -> IResult<&[u8], Vec<Text>> {
+            let (remaining, v) =
+                many_m_n(n_allele as usize, n_allele as usize, typed_string)(shared).unwrap();
+            Ok((remaining, v))
+        }
+        let (remaining, alleles) = alleles_from_shared(&self.shared[start..], n_allele).unwrap();
+        let byte_pos_after_alleles = self.shared.len() - remaining.len();
+        (alleles, byte_pos_after_alleles)
+    }
 }
 
 const CHROM_BYTE_RANGE: Range<usize> = 0..S_I32;
@@ -111,8 +113,9 @@ impl Record for RawBcfRecord {
         let n_allele = self.n_alleles();
         let start = self.allele_start_bytepos;
         fn alleles_from_shared(shared: &[u8], n_allele: usize) -> IResult<&[u8], Vec<Text>> {
+            let (shared, _ref_allele) = typed_string(shared).unwrap();
             let (remaining, v) =
-                many_m_n(n_allele as usize, n_allele as usize, typed_string)(shared).unwrap();
+                many_m_n(n_allele - 1, n_allele - 1, typed_string)(shared).unwrap();
             Ok((remaining, v))
         }
         alleles_from_shared(&self.shared[start..], n_allele)
@@ -129,7 +132,20 @@ impl Record for RawBcfRecord {
     }
 
     fn filters(&self) -> Vec<&str> {
-        unimplemented!()
+        let (_, byte_pos) = self.alleles();
+        let (_, filter_ids) = typed_ints(&self.shared[byte_pos..]).unwrap();
+        let filters = self.header.meta.get_vec("FILTER").unwrap();
+        filter_ids
+            .iter()
+            .map(|&i| {
+                let value = &filters[i];
+                if let HeaderValue::Filter(f) = value {
+                    f.id.as_ref()
+                } else {
+                    unreachable!()
+                }
+            })
+            .collect()
     }
 
     fn info<'a>(&'a self, tag: &'a [u8]) -> Info<'_> {
