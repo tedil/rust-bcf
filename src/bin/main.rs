@@ -13,7 +13,6 @@ use std::io::BufRead;
 
 fn main() -> Result<()> {
     let path = &std::env::args().collect_vec()[1];
-    // let path = "/home/till/projects/vembrane/HG_1_2_3_annotated_snpeff.uncompressed.bcf";
 
     let mut now = Instant::now();
     let records = RawBcfRecords::from_path(path).unwrap();
