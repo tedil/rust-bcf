@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::convert::TryFrom;
+use std::rc::Rc;
 
 use itertools::Itertools;
 use multimap::MultiMap;
@@ -7,6 +8,7 @@ use nom::branch::alt;
 use nom::bytes::streaming::{escaped, is_not};
 use nom::character::streaming::none_of;
 use nom::combinator::map;
+use nom::lib::std::collections::hash_map::RandomState;
 use nom::multi::{many0, many_m_n, separated_list0};
 use nom::number::streaming::le_u16;
 use nom::sequence::{delimited, separated_pair};
@@ -20,10 +22,8 @@ use nom::{
 use crate::record::{BcfRecord, RawBcfRecord};
 use crate::types::{
     Header, HeaderContig, HeaderFilter, HeaderFormat, HeaderInfo, HeaderKey, HeaderValue, InfoKey,
-    InfoNumber, Text, TypeDescriptor, TypeKind, TypedVec, Version,
+    InfoNumber, RawVec, Text, TypeDescriptor, TypeKind, TypedVec, Version, MISSING_QUAL,
 };
-use nom::lib::std::collections::hash_map::RandomState;
-use std::rc::Rc;
 
 /// The first 5 bytes in a BCF file are b"BCF" followed by two bytes
 /// which encode major and minor version.
@@ -130,6 +130,37 @@ pub(crate) fn typed_ints(input: &[u8]) -> IResult<&[u8], Vec<usize>> {
     }
 }
 
+fn raw_vec_from_td<'a, 'b>(
+    type_descriptor: &'b TypeDescriptor,
+    input: &'a [u8],
+) -> IResult<&'a [u8], RawVec<'a>> {
+    let num_elements = type_descriptor.num_elements;
+    let (input, vec) = match type_descriptor.kind {
+        TypeKind::Missing => (input, RawVec::Missing),
+        TypeKind::Int8 => {
+            let (data, input) = input.split_at(std::mem::size_of::<i8>() * num_elements);
+            (input, RawVec::Int32(data))
+        }
+        TypeKind::Int16 => {
+            let (data, input) = input.split_at(std::mem::size_of::<i16>() * num_elements);
+            (input, RawVec::Int32(data))
+        }
+        TypeKind::Int32 => {
+            let (data, input) = input.split_at(std::mem::size_of::<i32>() * num_elements);
+            (input, RawVec::Int32(data))
+        }
+        TypeKind::Float32 => {
+            let (data, input) = input.split_at(std::mem::size_of::<f32>() * num_elements);
+            (input, RawVec::Int32(data))
+        }
+        TypeKind::String => {
+            let (data, input) = input.split_at(std::mem::size_of::<u8>() * num_elements);
+            (input, RawVec::UString(data))
+        }
+    };
+    Ok((input, vec))
+}
+
 /// Reads the values described by `type_descriptor` and returns a `TypedVec` containing those values.
 fn typed_vec_from_td<'a, 'b>(
     type_descriptor: &'b TypeDescriptor,
@@ -175,8 +206,31 @@ fn typed_vec(input: &[u8]) -> IResult<&[u8], TypedVec> {
     typed_vec_from_td(&type_descriptor, input)
 }
 
+pub(crate) fn raw_info_pair(input: &[u8]) -> IResult<&[u8], (InfoKey, RawVec)> {
+    let (input, td) = type_descriptor(input)?;
+    assert_eq!(td.num_elements, 1);
+    let (input, info_key_offset) = match td.kind {
+        TypeKind::Int8 => {
+            let (input, val) = le_i8(input)?;
+            (input, val as InfoKey)
+        }
+        TypeKind::Int16 => {
+            let (input, val) = le_i16(input)?;
+            (input, val as InfoKey)
+        }
+        TypeKind::Int32 => {
+            let (input, val) = le_i32(input)?;
+            (input, val as InfoKey)
+        }
+        _ => panic!("The offset into the header dictionary for INFO keys must be an integer"),
+    };
+    let (input, td) = type_descriptor(input)?;
+    let (input, data) = raw_vec_from_td(&td, input)?;
+    Ok((input, (info_key_offset, data)))
+}
+
 /// Reads a `(InfoKey, TypedVec)` pair.
-fn info_pair(input: &[u8]) -> IResult<&[u8], (InfoKey, TypedVec)> {
+pub(crate) fn info_pair(input: &[u8]) -> IResult<&[u8], (InfoKey, TypedVec)> {
     let (input, type_descriptor) = type_descriptor(input)?;
     assert_eq!(type_descriptor.num_elements, 1);
     let (input, info_key_offset) = match type_descriptor.kind {
@@ -199,7 +253,7 @@ fn info_pair(input: &[u8]) -> IResult<&[u8], (InfoKey, TypedVec)> {
 }
 
 /// Reads all INFO entries for a record
-fn info(n_info: i16, input: &[u8]) -> IResult<&[u8], Vec<(InfoKey, TypedVec)>> {
+pub(crate) fn info(n_info: i16, input: &[u8]) -> IResult<&[u8], Vec<(InfoKey, TypedVec)>> {
     let n_info = n_info as usize;
     many_m_n(n_info, n_info, info_pair)(input)
 }
@@ -264,8 +318,10 @@ pub(crate) fn record_from_length(
             } else {
                 vec![]
             },
-            qual: if qual.is_nan() {
-                // && qual & 0b0000_0000_0100_0000_0000_0000_0000_0000 == 1 {
+            qual: if qual.is_nan()
+                && qual.to_bits() & 0b0000_0000_0100_0000_0000_0000_0000_0000 != 0
+                || qual.to_bits() == MISSING_QUAL
+            {
                 None
             } else {
                 Some(qual)

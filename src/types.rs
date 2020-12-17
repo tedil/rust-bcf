@@ -5,8 +5,12 @@ use std::str::FromStr;
 use strum::EnumString;
 
 use crate::parser;
+use nom::combinator::map;
+use nom::multi::many0;
+use nom::number::complete::{le_f32, le_i8};
+use nom::IResult;
 
-const MISSING_QUAL: f32 = 0x7F800001 as f32;
+pub(crate) const MISSING_QUAL: u32 = 0x7F800001;
 
 pub(crate) type Text = Vec<u8>;
 // pub(crate) type TextSlice<'a> = &'a [u8];
@@ -47,6 +51,68 @@ pub enum TypedVec {
     Int32(Vec<i32>),
     Float32(Vec<f32>),
     UString(Vec<u8>),
+}
+
+#[derive(Debug)]
+pub enum RawVec<'a> {
+    Missing,
+    Int32(&'a [u8]),
+    Float32(&'a [u8]),
+    UString(&'a [u8]),
+}
+
+impl<'a> From<RawVec<'a>> for TypedVec {
+    fn from(raw: RawVec<'a>) -> Self {
+        match raw {
+            RawVec::Missing => TypedVec::Missing,
+            RawVec::Int32(input) => {
+                fn parse(input: &[u8]) -> IResult<&[u8], Vec<i32>> {
+                    let (input, data) = many0(map(le_i8, Into::into))(input)?;
+                    Ok((input, data))
+                }
+                let (input, data) = parse(input).unwrap();
+                assert!(input.is_empty());
+                TypedVec::Int32(data)
+            }
+            RawVec::Float32(input) => {
+                fn parse(input: &[u8]) -> IResult<&[u8], Vec<f32>> {
+                    let (input, data) = many0(le_f32)(input)?;
+                    Ok((input, data))
+                }
+                let (input, data) = parse(input).unwrap();
+                assert!(input.is_empty());
+                TypedVec::Float32(data)
+            }
+            RawVec::UString(input) => TypedVec::UString(input.into()),
+        }
+    }
+}
+
+impl TypedVec {
+    pub fn integer(&self) -> &[i32] {
+        match self {
+            TypedVec::Int32(v) => v.as_slice(),
+            _ => unreachable!(),
+        }
+    }
+
+    pub fn float(&mut self) -> &[f32] {
+        match self {
+            TypedVec::Float32(v) => v.as_slice(),
+            _ => unreachable!(),
+        }
+    }
+
+    pub fn flag(&self) -> bool {
+        unimplemented!()
+    }
+
+    pub fn string(&self) -> Vec<&[u8]> {
+        match self {
+            TypedVec::UString(v) => v.split(|c| *c == b',').collect(),
+            _ => unreachable!(),
+        }
+    }
 }
 
 #[derive(Debug)]
