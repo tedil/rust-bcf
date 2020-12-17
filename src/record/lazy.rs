@@ -3,12 +3,16 @@ use std::ops::Range;
 use std::rc::Rc;
 
 use nom::multi::many_m_n;
-use nom::number::streaming::{le_f32, le_i16, le_i32};
+use nom::number::streaming::{le_f32, le_i16, le_i32, le_u24};
 use nom::IResult;
 
-use crate::parser::{raw_info_pair, type_descriptor, typed_ints, typed_string};
+use crate::parser::{
+    genotype_field, raw_genotype_field, raw_info_pair, type_descriptor, typed_ints, typed_string,
+};
 use crate::record::Record;
 use crate::types::{Header, HeaderValue, Text, TypeDescriptor, TypeKind, TypedVec, MISSING_QUAL};
+use itertools::Itertools;
+use nom::number::complete::{le_u32, le_u8};
 
 #[derive(Debug)]
 pub struct RawBcfRecord {
@@ -20,9 +24,14 @@ pub struct RawBcfRecord {
 
 const S_I16: usize = size_of::<i16>();
 const S_I32: usize = size_of::<i32>();
+const S_U8: usize = size_of::<u8>();
 const S_U32: usize = size_of::<u32>();
 const S_F32: usize = size_of::<f32>();
+
 const TYPE_DESCRIPTOR_LENGTH: usize = size_of::<u8>();
+const CHROM_BYTE_RANGE: Range<usize> = 0..S_I32;
+const POS_BYTE_RANGE: Range<usize> = S_I32..S_I32 * 2;
+const QUAL_BYTE_RANGE: Range<usize> = S_I32 * 3..S_I32 * 3 + S_F32;
 
 impl RawBcfRecord {
     pub(crate) fn new(shared: Vec<u8>, format: Vec<u8>, header: Rc<Header>) -> Self {
@@ -59,6 +68,16 @@ impl RawBcfRecord {
         n_info_from_shared(&self.shared).unwrap().1 as usize
     }
 
+    fn n_fmt_n_sample(&self) -> (usize, usize) {
+        fn n_fmt_n_sample_from_shared(shared: &[u8]) -> IResult<&[u8], (u32, u8)> {
+            let (remaining, n_sample) = le_u24(&shared[S_I32 * 3 + S_F32 + S_I16 * 2..])?;
+            let (remaining, n_fmt) = le_u8(remaining)?;
+            Ok((remaining, (n_sample, n_fmt)))
+        }
+        let (n_sample, n_fmt) = n_fmt_n_sample_from_shared(&self.shared).unwrap().1;
+        (n_fmt as usize, n_sample as usize)
+    }
+
     fn alleles(&self) -> (Vec<Text>, usize) {
         let n_allele = self.n_alleles();
         let start = self.allele_start_bytepos;
@@ -72,10 +91,6 @@ impl RawBcfRecord {
         (alleles, byte_pos_after_alleles)
     }
 }
-
-const CHROM_BYTE_RANGE: Range<usize> = 0..S_I32;
-const POS_BYTE_RANGE: Range<usize> = S_I32..S_I32 * 2;
-const QUAL_BYTE_RANGE: Range<usize> = S_I32 * 3..S_I32 * 3 + S_F32;
 
 impl Record for RawBcfRecord {
     fn chrom(&self) -> &str {
@@ -168,10 +183,40 @@ impl Record for RawBcfRecord {
             })
             .filter_map(|(offset, data)| {
                 // … and check if it corresponds to the tag we're looking for
-                self.header.tag_to_offset.get(&tag).and_then(|&idx| {
+                self.header.info_tag_to_offset.get(&tag).and_then(|&idx| {
                     if idx == offset {
                         // convert RawVec to TypedVec
                         Some(data.into())
+                    } else {
+                        None
+                    }
+                })
+            })
+            .next()
+    }
+
+    fn format(&self, tag: &[u8]) -> Option<Vec<TypedVec>> {
+        if self.format.is_empty() {
+            return None;
+        }
+        let (n_fmt, n_sample) = self.n_fmt_n_sample();
+
+        let tag = std::str::from_utf8(tag).unwrap().to_owned();
+        let mut input = &self.format[..];
+        (0..n_fmt as usize)
+            .map(|_| {
+                // (note that raw_info_pair does not do type conversion between byteslice and
+                // requested type)
+                let (i, fmt) = raw_genotype_field(n_sample as u32, input).unwrap();
+                input = i;
+                fmt
+            })
+            .filter_map(|(offset, data)| {
+                // … and check if it corresponds to the tag we're looking for
+                self.header.format_tag_to_offset.get(&tag).and_then(|&idx| {
+                    if idx == offset {
+                        // convert RawVec to TypedVec
+                        Some(data.into_iter().map(Into::into).collect_vec())
                     } else {
                         None
                     }

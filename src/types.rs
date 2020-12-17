@@ -7,7 +7,7 @@ use strum::EnumString;
 use crate::parser;
 use nom::combinator::map;
 use nom::multi::many0;
-use nom::number::complete::{le_f32, le_i8};
+use nom::number::complete::{le_f32, le_i16, le_i32, le_i8};
 use nom::IResult;
 
 pub(crate) const MISSING_QUAL: u32 = 0x7F800001;
@@ -56,6 +56,8 @@ pub enum TypedVec {
 #[derive(Debug)]
 pub enum RawVec<'a> {
     Missing,
+    Int8(&'a [u8]),
+    Int16(&'a [u8]),
     Int32(&'a [u8]),
     Float32(&'a [u8]),
     UString(&'a [u8]),
@@ -65,9 +67,27 @@ impl<'a> From<RawVec<'a>> for TypedVec {
     fn from(raw: RawVec<'a>) -> Self {
         match raw {
             RawVec::Missing => TypedVec::Missing,
-            RawVec::Int32(input) => {
+            RawVec::Int8(input) => {
                 fn parse(input: &[u8]) -> IResult<&[u8], Vec<i32>> {
                     let (input, data) = many0(map(le_i8, Into::into))(input)?;
+                    Ok((input, data))
+                }
+                let (input, data) = parse(input).unwrap();
+                assert!(input.is_empty());
+                TypedVec::Int32(data)
+            }
+            RawVec::Int16(input) => {
+                fn parse(input: &[u8]) -> IResult<&[u8], Vec<i32>> {
+                    let (input, data) = many0(map(le_i16, Into::into))(input)?;
+                    Ok((input, data))
+                }
+                let (input, data) = parse(input).unwrap();
+                assert!(input.is_empty());
+                TypedVec::Int32(data)
+            }
+            RawVec::Int32(input) => {
+                fn parse(input: &[u8]) -> IResult<&[u8], Vec<i32>> {
+                    let (input, data) = many0(le_i32)(input)?;
                     Ok((input, data))
                 }
                 let (input, data) = parse(input).unwrap();
@@ -119,8 +139,9 @@ impl TypedVec {
 pub struct Header {
     pub(crate) meta: MultiMap<String, HeaderValue>,
     pub(crate) info: HashMap<usize, HeaderInfo>,
-    pub(crate) tag_to_offset: HashMap<String, usize>,
-    pub(crate) format: Vec<HeaderFormat>,
+    pub(crate) info_tag_to_offset: HashMap<String, usize>,
+    pub(crate) format: HashMap<usize, HeaderFormat>,
+    pub(crate) format_tag_to_offset: HashMap<String, usize>,
     pub(crate) contigs: Vec<HeaderContig>,
 }
 
@@ -192,11 +213,11 @@ impl<'a> From<Vec<(&'a str, &'a str)>> for HeaderInfo {
 
 #[derive(Debug)]
 pub struct HeaderFormat {
-    id: String,
+    pub(crate) id: String,
     number: InfoNumber,
     kind: InfoType,
     description: String,
-    idx: usize,
+    pub(crate) idx: usize,
 }
 
 impl<'a> From<Vec<(&'a str, &'a str)>> for HeaderFormat {

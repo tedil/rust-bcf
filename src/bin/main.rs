@@ -5,7 +5,6 @@ use counter::Counter;
 use itertools::Itertools;
 use rust_htslib::bcf::{Read, Reader};
 
-// use crate::parser::parse;
 use rust_bcf::reader::RawBcfRecords;
 use rust_bcf::record::Record;
 use rust_bcf::types::TypedVec;
@@ -18,12 +17,13 @@ fn main() -> Result<()> {
     let records = RawBcfRecords::from_path(path).unwrap();
     let _counts: Counter<_> = records
         // .map(|record| record.chrom().to_owned())
-        .map(|record| {
-            record
-                .info(b"callsets")
-                .map(|v| v.integer()[0])
-                .unwrap_or(0)
-        })
+        // .map(|record| {
+        //     record
+        //         .info(b"callsets")
+        //         .map(|v| v.integer()[0])
+        //         .unwrap_or(0)
+        // })
+        .map(|record| record.format(b"DP").map(|v| v[0].integer()[0]).unwrap_or(0))
         // .map(|mut record| {
         //     String::from_utf8(
         //         record
@@ -55,8 +55,13 @@ fn main() -> Result<()> {
             // } else {
             //     "".into()
             // }
-            if let Ok(Some(v)) = record.info(b"callsets").integer() {
-                v[0]
+            // if let Ok(Some(v)) = record.info(b"callsets").integer() {
+            //     v[0]
+            // } else {
+            //     0
+            // }
+            if let Ok(v) = record.format(b"DP").integer() {
+                v[0][0]
             } else {
                 0
             }

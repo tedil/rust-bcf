@@ -139,11 +139,11 @@ fn raw_vec_from_td<'a, 'b>(
         TypeKind::Missing => (input, RawVec::Missing),
         TypeKind::Int8 => {
             let (data, input) = input.split_at(std::mem::size_of::<i8>() * num_elements);
-            (input, RawVec::Int32(data))
+            (input, RawVec::Int8(data))
         }
         TypeKind::Int16 => {
             let (data, input) = input.split_at(std::mem::size_of::<i16>() * num_elements);
-            (input, RawVec::Int32(data))
+            (input, RawVec::Int16(data))
         }
         TypeKind::Int32 => {
             let (data, input) = input.split_at(std::mem::size_of::<i32>() * num_elements);
@@ -260,7 +260,10 @@ pub(crate) fn info(n_info: i16, input: &[u8]) -> IResult<&[u8], Vec<(InfoKey, Ty
 
 type FormatKey = usize;
 
-fn genotype_field(n_sample: u32, input: &[u8]) -> IResult<&[u8], (usize, Vec<TypedVec>)> {
+pub(crate) fn genotype_field(
+    n_sample: u32,
+    input: &[u8],
+) -> IResult<&[u8], (usize, Vec<TypedVec>)> {
     let n_sample = n_sample as usize;
     let (input, fmt_key_offset) = typed_int(input)?;
     let (input, data_type) = type_descriptor(input)?;
@@ -268,6 +271,23 @@ fn genotype_field(n_sample: u32, input: &[u8]) -> IResult<&[u8], (usize, Vec<Typ
     let mut sample_values = Vec::with_capacity(n_sample);
     for _ in 0..n_sample {
         let r = typed_vec_from_td(&data_type, input)?;
+        input = r.0;
+        sample_values.push(r.1);
+    }
+    Ok((input, (fmt_key_offset as FormatKey, sample_values)))
+}
+
+pub(crate) fn raw_genotype_field(
+    n_sample: u32,
+    input: &[u8],
+) -> IResult<&[u8], (usize, Vec<RawVec>)> {
+    let n_sample = n_sample as usize;
+    let (input, fmt_key_offset) = typed_int(input)?;
+    let (input, data_type) = type_descriptor(input)?;
+    let mut input = input;
+    let mut sample_values = Vec::with_capacity(n_sample);
+    for _ in 0..n_sample {
+        let r = raw_vec_from_td(&data_type, input)?;
         input = r.0;
         sample_values.push(r.1);
     }
@@ -447,18 +467,31 @@ pub(crate) fn header(header_length: u32, input: &[u8]) -> IResult<&[u8], Header>
     let format = entries.remove("FORMAT").unwrap_or_else(Vec::new);
     let contigs = entries.remove("contig").unwrap_or_else(Vec::new);
 
-    let info: HashMap<usize, HeaderInfo, RandomState> = info
+    let info: HashMap<usize, HeaderInfo> = info
         .into_iter()
         .filter_map(|v| match v {
             HeaderValue::Info(info) => Some((info.idx, info)),
             _ => None,
         })
         .collect();
-    let tag_to_offset = info.iter().map(|(idx, hi)| (hi.id.clone(), *idx)).collect();
+    let info_tag_to_offset = info.iter().map(|(idx, hi)| (hi.id.clone(), *idx)).collect();
+
+    let format: HashMap<usize, HeaderFormat> = format
+        .into_iter()
+        .filter_map(|v| match v {
+            HeaderValue::Format(format) => Some((format.idx, format)),
+            _ => None,
+        })
+        .collect();
+    let format_tag_to_offset = format
+        .iter()
+        .map(|(idx, hi)| (hi.id.clone(), *idx))
+        .collect();
+
     let header = Header {
         meta: entries,
         info,
-        tag_to_offset,
+        info_tag_to_offset,
         contigs: contigs
             .into_iter()
             .filter_map(|v| match v {
@@ -466,13 +499,8 @@ pub(crate) fn header(header_length: u32, input: &[u8]) -> IResult<&[u8], Header>
                 _ => None,
             })
             .collect(),
-        format: format
-            .into_iter()
-            .filter_map(|v| match v {
-                HeaderValue::Format(format) => Some(format),
-                _ => None,
-            })
-            .collect(),
+        format,
+        format_tag_to_offset,
     };
     Ok((input, header))
 }

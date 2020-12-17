@@ -18,4 +18,6 @@ pub trait Record {
     fn filters(&self) -> Vec<&str>;
 
     fn info(&self, tag: &[u8]) -> Option<TypedVec>;
+
+    fn format(&self, tag: &[u8]) -> Option<Vec<TypedVec>>;
 }

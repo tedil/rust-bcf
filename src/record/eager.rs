@@ -57,4 +57,8 @@ impl Record for BcfRecord {
     fn info(&self, tag: &[u8]) -> Option<TypedVec> {
         unimplemented!()
     }
+
+    fn format(&self, tag: &[u8]) -> Option<Vec<TypedVec>> {
+        unimplemented!()
+    }
 }
