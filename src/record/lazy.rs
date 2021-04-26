@@ -6,13 +6,11 @@ use nom::multi::many_m_n;
 use nom::number::streaming::{le_f32, le_i16, le_i32, le_u24};
 use nom::IResult;
 
-use crate::parser::{
-    genotype_field, raw_genotype_field, raw_info_pair, type_descriptor, typed_ints, typed_string,
-};
+use crate::parser::{raw_genotype_field, raw_info_pair, type_descriptor, typed_ints, typed_string};
 use crate::record::Record;
 use crate::types::{Header, HeaderValue, Text, TypeDescriptor, TypeKind, TypedVec, MISSING_QUAL};
 use itertools::Itertools;
-use nom::number::complete::{le_u32, le_u8};
+use nom::number::complete::le_u8;
 
 #[derive(Debug)]
 pub struct RawBcfRecord {
@@ -24,7 +22,6 @@ pub struct RawBcfRecord {
 
 const S_I16: usize = size_of::<i16>();
 const S_I32: usize = size_of::<i32>();
-const S_U8: usize = size_of::<u8>();
 const S_U32: usize = size_of::<u32>();
 const S_F32: usize = size_of::<f32>();
 

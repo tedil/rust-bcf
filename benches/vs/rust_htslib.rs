@@ -1,7 +1,3 @@
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
-
-use itertools::Itertools;
-use rust_htslib::bcf::Record;
 use rust_htslib::bcf::{Read, Reader};
 use std::path::Path;
 

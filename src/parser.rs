@@ -8,7 +8,6 @@ use nom::branch::alt;
 use nom::bytes::streaming::{escaped, is_not};
 use nom::character::streaming::none_of;
 use nom::combinator::map;
-use nom::lib::std::collections::hash_map::RandomState;
 use nom::multi::{many0, many_m_n, separated_list0};
 use nom::number::streaming::le_u16;
 use nom::sequence::{delimited, separated_pair};
@@ -304,7 +303,7 @@ pub(crate) fn record_length(input: &[u8]) -> IResult<&[u8], (u32, u32)> {
 /// Given `l_shared` and `l_indiv`, read the actual data defining the record.
 /// Note that this actually parses everything (in contrast to htslib)
 pub(crate) fn record_from_length(
-    l_shared: u32,
+    _l_shared: u32,
     l_indiv: u32,
     header: Rc<Header>,
     input: &[u8],
