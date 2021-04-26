@@ -487,6 +487,15 @@ pub(crate) fn header(header_length: u32, input: &[u8]) -> IResult<&[u8], Header>
         .map(|(idx, hi)| (hi.id.clone(), *idx))
         .collect();
 
+    let (_rest, samples) = delimited(tag(b"#"), is_not("\n"), tag("\n\x00"))(_header)?;
+    assert!(_rest.is_empty());
+    let samples = std::str::from_utf8(samples)
+        .unwrap()
+        .split('\t')
+        .skip(9)
+        .map(|s| s.into())
+        .collect_vec();
+
     let header = Header {
         meta: entries,
         info,
@@ -500,6 +509,7 @@ pub(crate) fn header(header_length: u32, input: &[u8]) -> IResult<&[u8], Header>
             .collect(),
         format,
         format_tag_to_offset,
+        samples,
     };
     Ok((input, header))
 }

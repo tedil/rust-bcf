@@ -143,6 +143,7 @@ pub struct Header {
     pub(crate) format: HashMap<usize, HeaderFormat>,
     pub(crate) format_tag_to_offset: HashMap<String, usize>,
     pub(crate) contigs: Vec<HeaderContig>,
+    pub(crate) samples: Vec<Sample>,
 }
 
 pub type HeaderKey<'a> = &'a str;
@@ -187,6 +188,8 @@ pub struct HeaderInfo {
     pub(crate) idx: usize,
     additional: HashMap<String, String>,
 }
+
+pub type Sample = String;
 
 impl<'a> From<Vec<(&'a str, &'a str)>> for HeaderInfo {
     fn from(data: Vec<(&'a str, &'a str)>) -> Self {
