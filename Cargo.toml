@@ -8,15 +8,15 @@ edition = "2018"
 
 [dependencies]
 bgzip = "0.1"
-itertools = "0.9"
+itertools = "0.10"
 anyhow = "1.0"
-nom = "6.0"
+nom = "6.1"
 num_enum = "0.5"
 num_enum_derive = "0.5"
-strum = { version = "0.19", features = ["derive"] }
+strum = { version = "0.20", features = ["derive"] }
 counter = "0.5"
 multimap = "0.8"
-rust-htslib = "0.35"
+rust-htslib = "0.36"
 flate2 = "1.0"
 niffler = "2.3"
 
