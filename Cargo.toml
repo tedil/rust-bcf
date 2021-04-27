@@ -16,7 +16,6 @@ num_enum_derive = "0.5"
 strum = { version = "0.20", features = ["derive"] }
 counter = "0.5"
 multimap = "0.8"
-rust-htslib = "0.36"
 flate2 = "1.0"
 niffler = "2.3"
 
@@ -26,6 +25,7 @@ codegen-units = 1
 
 [dev-dependencies]
 criterion = "0.3"
+rust-htslib = "0.36"
 
 [[bench]]
 name = "comparison"

@@ -1,4 +1,4 @@
-use rust_bcf::reader::RawBcfRecords as BcfRecords;
+use rust_bcf::reader::BcfRecords;
 use rust_bcf::record::Record;
 use std::path::Path;
 

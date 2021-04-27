@@ -13,16 +13,16 @@ use nom::number::streaming::le_u16;
 use nom::sequence::{delimited, separated_pair};
 use nom::{
     bytes::streaming::{tag, take},
-    number::streaming::{le_f32, le_i16, le_i32, le_i8, le_u24, le_u32, le_u8},
+    number::streaming::{le_i16, le_i32, le_i8, le_u32, le_u8},
     sequence::tuple,
     IResult,
 };
 
-use crate::record::{BcfRecord, RawBcfRecord};
 use crate::types::{
     Header, HeaderContig, HeaderFilter, HeaderFormat, HeaderInfo, HeaderKey, HeaderValue, InfoKey,
-    InfoNumber, RawVec, Text, TypeDescriptor, TypeKind, TypedVec, Version, MISSING_QUAL,
+    InfoNumber, RawVec, Text, TypeDescriptor, TypeKind, Version,
 };
+use crate::BcfRecord;
 
 /// The first 5 bytes in a BCF file are b"BCF" followed by two bytes
 /// which encode major and minor version.
@@ -160,51 +160,6 @@ fn raw_vec_from_td<'a, 'b>(
     Ok((input, vec))
 }
 
-/// Reads the values described by `type_descriptor` and returns a `TypedVec` containing those values.
-fn typed_vec_from_td<'a, 'b>(
-    type_descriptor: &'b TypeDescriptor,
-    input: &'a [u8],
-) -> IResult<&'a [u8], TypedVec> {
-    let num_elements = type_descriptor.num_elements;
-    let (input, vec) = match type_descriptor.kind {
-        TypeKind::Missing => (input, TypedVec::Missing),
-        TypeKind::Int8 => {
-            let (input, data) = many_m_n(num_elements, num_elements, map(le_i8, i32::from))(input)?;
-            (input, TypedVec::Int32(data))
-        }
-        TypeKind::Int16 => {
-            let (input, data) =
-                many_m_n(num_elements, num_elements, map(le_i16, i32::from))(input)?;
-            (input, TypedVec::Int32(data))
-        }
-        TypeKind::Int32 => {
-            let (input, data) = many_m_n(num_elements, num_elements, le_i32)(input)?;
-            (input, TypedVec::Int32(data))
-        }
-        TypeKind::Float32 => {
-            let (input, data) = many_m_n(num_elements, num_elements, le_f32)(input)?;
-            (input, TypedVec::Float32(data))
-        }
-        TypeKind::String => {
-            // let (input, data) = many_m_n(num_elements, num_elements, le_u8)(input)?;
-            // let data = String::from_utf8(data.to_vec()).unwrap();
-            let (data, input) = input.split_at(num_elements);
-            (
-                input,
-                // TypedVec::String(data.split(',').map(str::to_owned).collect_vec()),
-                TypedVec::UString(data.into()),
-            )
-        }
-    };
-    Ok((input, vec))
-}
-
-/// First reads a `TypeDescriptor`, then the value(s) described by this type descriptor.
-fn typed_vec(input: &[u8]) -> IResult<&[u8], TypedVec> {
-    let (input, type_descriptor) = type_descriptor(input)?;
-    typed_vec_from_td(&type_descriptor, input)
-}
-
 pub(crate) fn raw_info_pair(input: &[u8]) -> IResult<&[u8], (InfoKey, RawVec)> {
     let (input, td) = type_descriptor(input)?;
     assert_eq!(td.num_elements, 1);
@@ -228,53 +183,7 @@ pub(crate) fn raw_info_pair(input: &[u8]) -> IResult<&[u8], (InfoKey, RawVec)> {
     Ok((input, (info_key_offset, data)))
 }
 
-/// Reads a `(InfoKey, TypedVec)` pair.
-pub(crate) fn info_pair(input: &[u8]) -> IResult<&[u8], (InfoKey, TypedVec)> {
-    let (input, type_descriptor) = type_descriptor(input)?;
-    assert_eq!(type_descriptor.num_elements, 1);
-    let (input, info_key_offset) = match type_descriptor.kind {
-        TypeKind::Int8 => {
-            let (input, val) = le_i8(input)?;
-            (input, val as InfoKey)
-        }
-        TypeKind::Int16 => {
-            let (input, val) = le_i16(input)?;
-            (input, val as InfoKey)
-        }
-        TypeKind::Int32 => {
-            let (input, val) = le_i32(input)?;
-            (input, val as InfoKey)
-        }
-        _ => panic!("The offset into the header dictionary for INFO keys must be an integer"),
-    };
-    let (input, data) = typed_vec(input)?;
-    Ok((input, (info_key_offset, data)))
-}
-
-/// Reads all INFO entries for a record
-pub(crate) fn info(n_info: i16, input: &[u8]) -> IResult<&[u8], Vec<(InfoKey, TypedVec)>> {
-    let n_info = n_info as usize;
-    many_m_n(n_info, n_info, info_pair)(input)
-}
-
 type FormatKey = usize;
-
-pub(crate) fn genotype_field(
-    n_sample: u32,
-    input: &[u8],
-) -> IResult<&[u8], (usize, Vec<TypedVec>)> {
-    let n_sample = n_sample as usize;
-    let (input, fmt_key_offset) = typed_int(input)?;
-    let (input, data_type) = type_descriptor(input)?;
-    let mut input = input;
-    let mut sample_values = Vec::with_capacity(n_sample);
-    for _ in 0..n_sample {
-        let r = typed_vec_from_td(&data_type, input)?;
-        input = r.0;
-        sample_values.push(r.1);
-    }
-    Ok((input, (fmt_key_offset as FormatKey, sample_values)))
-}
 
 pub(crate) fn raw_genotype_field(
     n_sample: u32,
@@ -300,70 +209,17 @@ pub(crate) fn record_length(input: &[u8]) -> IResult<&[u8], (u32, u32)> {
     tuple((le_u32, le_u32))(input)
 }
 
-/// Given `l_shared` and `l_indiv`, read the actual data defining the record.
-/// Note that this actually parses everything (in contrast to htslib)
-pub(crate) fn record_from_length(
-    _l_shared: u32,
-    l_indiv: u32,
-    header: Rc<Header>,
-    input: &[u8],
-) -> IResult<&[u8], BcfRecord> {
-    let (input, (chrom, pos, _rlen, qual, n_info, n_allele, n_sample, n_fmt)) = tuple((
-        le_i32, le_i32, le_i32, le_f32, le_i16, le_i16, le_u24, le_u8,
-    ))(input)?;
-    let (input, id) = typed_string(input)?;
-    let (input, (alleles, filters)) = tuple((
-        many_m_n(n_allele as usize, n_allele as usize, typed_string),
-        typed_ints,
-    ))(input)?;
-    let (input, info) = info(n_info, input)?;
-    let (input, format) = if l_indiv > 0 {
-        let (input, format) = many_m_n(n_fmt as usize, n_fmt as usize, |d| {
-            genotype_field(n_sample, d)
-        })(input)?;
-        (input, Some(format))
-    } else {
-        (input, None)
-    };
-    Ok((
-        input,
-        BcfRecord {
-            chrom: chrom as u32,
-            pos: pos as u32,
-            id: Some(id),
-            ref_allele: alleles[0].clone(),
-            alt_alleles: if alleles.len() > 1 {
-                alleles[1..].to_vec()
-            } else {
-                vec![]
-            },
-            qual: if qual.is_nan()
-                && qual.to_bits() & 0b0000_0000_0100_0000_0000_0000_0000_0000 != 0
-                || qual.to_bits() == MISSING_QUAL
-            {
-                None
-            } else {
-                Some(qual)
-            },
-            filter: filters,
-            info,
-            format,
-            header,
-        },
-    ))
-}
-
 pub(crate) fn raw_record_from_length(
     l_shared: u32,
     l_indiv: u32,
     header: Rc<Header>,
     input: &[u8],
-) -> IResult<&[u8], RawBcfRecord> {
+) -> IResult<&[u8], BcfRecord> {
     let (shared, input) = input.split_at(l_shared as usize);
     let (l_indiv, input) = input.split_at(l_indiv as usize);
     Ok((
         input,
-        RawBcfRecord::new(shared.to_vec(), l_indiv.to_vec(), header),
+        BcfRecord::new(shared.to_vec(), l_indiv.to_vec(), header),
     ))
 }
 

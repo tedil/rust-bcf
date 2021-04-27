@@ -3,10 +3,13 @@ pub mod reader;
 pub mod record;
 pub mod types;
 
+pub use reader::BcfRecords;
+pub use record::BcfRecord;
+
 #[cfg(test)]
 mod test {
 
-    use super::reader::RawBcfRecords as BcfRecords;
+    use super::reader::BcfRecords;
 
     #[test]
     fn test_samples() {

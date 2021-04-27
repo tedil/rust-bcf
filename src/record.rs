@@ -7,13 +7,32 @@ use nom::number::streaming::{le_f32, le_i16, le_i32, le_u24};
 use nom::IResult;
 
 use crate::parser::{raw_genotype_field, raw_info_pair, type_descriptor, typed_ints, typed_string};
-use crate::record::Record;
 use crate::types::{Header, HeaderValue, Text, TypeDescriptor, TypeKind, TypedVec, MISSING_QUAL};
 use itertools::Itertools;
 use nom::number::complete::le_u8;
 
+pub trait Record {
+    fn chrom(&self) -> &str;
+
+    fn pos(&self) -> u32;
+
+    fn ref_allele(&self) -> Text;
+
+    fn alt_alleles(&self) -> Vec<Text>;
+
+    fn qual(&self) -> Option<f32>;
+
+    fn filters(&self) -> Vec<&str>;
+
+    fn info(&self, tag: &[u8]) -> Option<TypedVec>;
+
+    fn format(&self, tag: &[u8]) -> Option<Vec<TypedVec>>;
+
+    fn genotypes(&self) -> Vec<Vec<GenotypeAllele>>;
+}
+
 #[derive(Debug)]
-pub struct RawBcfRecord {
+pub struct BcfRecord {
     pub(crate) shared: Vec<u8>,
     pub(crate) format: Vec<u8>,
     pub(crate) header: Rc<Header>,
@@ -30,7 +49,7 @@ const CHROM_BYTE_RANGE: Range<usize> = 0..S_I32;
 const POS_BYTE_RANGE: Range<usize> = S_I32..S_I32 * 2;
 const QUAL_BYTE_RANGE: Range<usize> = S_I32 * 3..S_I32 * 3 + S_F32;
 
-impl RawBcfRecord {
+impl BcfRecord {
     pub(crate) fn new(shared: Vec<u8>, format: Vec<u8>, header: Rc<Header>) -> Self {
         // The list of alleles starts right after ID
         let mut allele_start_bytepos = S_I32 + S_I32 + S_I32 + S_F32 + S_I16 + S_I16 + S_U32;
@@ -89,7 +108,7 @@ impl RawBcfRecord {
     }
 }
 
-impl Record for RawBcfRecord {
+impl Record for BcfRecord {
     fn chrom(&self) -> &str {
         fn chrom_from_shared(shared: &[u8]) -> IResult<&[u8], i32> {
             let (remaining, v) = le_i32(&shared[CHROM_BYTE_RANGE])?;
@@ -220,5 +239,50 @@ impl Record for RawBcfRecord {
                 })
             })
             .next()
+    }
+
+    fn genotypes(&self) -> Vec<Vec<GenotypeAllele>> {
+        let gts = self.format(b"GT").unwrap_or_else(Vec::new);
+        gts.iter()
+            .map(|gt| {
+                gt.integer()
+                    .iter()
+                    .cloned()
+                    .map(GenotypeAllele::from)
+                    .collect()
+            })
+            .collect()
+    }
+}
+
+/// Phased or unphased alleles, represented as indices.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum GenotypeAllele {
+    Unphased(i32),
+    Phased(i32),
+    UnphasedMissing,
+    PhasedMissing,
+}
+
+impl From<i32> for GenotypeAllele {
+    /// Decode given integer according to BCF standard.
+    fn from(encoded: i32) -> Self {
+        match (encoded, encoded & 1) {
+            (0, 0) => GenotypeAllele::UnphasedMissing,
+            (1, 1) => GenotypeAllele::PhasedMissing,
+            (e, 1) => GenotypeAllele::Phased((e >> 1) - 1),
+            (e, 0) => GenotypeAllele::Unphased((e >> 1) - 1),
+            _ => panic!("unexpected phasing type"),
+        }
+    }
+}
+
+impl GenotypeAllele {
+    /// Get the index into the list of alleles.
+    pub fn index(self) -> Option<u32> {
+        match self {
+            GenotypeAllele::Unphased(i) | GenotypeAllele::Phased(i) => Some(i as u32),
+            GenotypeAllele::UnphasedMissing | GenotypeAllele::PhasedMissing => None,
+        }
     }
 }
