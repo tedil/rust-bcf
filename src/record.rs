@@ -12,6 +12,8 @@ use itertools::Itertools;
 use nom::number::complete::le_u8;
 
 pub trait Record {
+    fn id(&self) -> Text;
+
     fn chrom(&self) -> &str;
 
     fn pos(&self) -> u32;
@@ -36,6 +38,7 @@ pub struct BcfRecord {
     pub(crate) shared: Vec<u8>,
     pub(crate) format: Vec<u8>,
     pub(crate) header: Rc<Header>,
+    id_start_bytepos: usize,
     allele_start_bytepos: usize,
 }
 
@@ -52,17 +55,18 @@ const QUAL_BYTE_RANGE: Range<usize> = S_I32 * 3..S_I32 * 3 + S_F32;
 impl BcfRecord {
     pub(crate) fn new(shared: Vec<u8>, format: Vec<u8>, header: Rc<Header>) -> Self {
         // The list of alleles starts right after ID
-        let mut allele_start_bytepos = S_I32 + S_I32 + S_I32 + S_F32 + S_I16 + S_I16 + S_U32;
+        let id_start_bytepos = S_I32 + S_I32 + S_I32 + S_F32 + S_I16 + S_I16 + S_U32;
         // however, ID is a "typed string" in bcf-speak, so we have to read the type descriptor (1 byte)
-        // to know long the ID is (and then skip those bytes)
+        // to know how long the ID is (and then skip those bytes)
         let (_, TypeDescriptor { kind, num_elements }) =
-            type_descriptor(&shared[allele_start_bytepos..]).unwrap();
+            type_descriptor(&shared[id_start_bytepos..]).unwrap();
         assert_eq!(kind, TypeKind::String);
-        allele_start_bytepos += TYPE_DESCRIPTOR_LENGTH + num_elements;
+        let allele_start_bytepos = id_start_bytepos + TYPE_DESCRIPTOR_LENGTH + num_elements;
         Self {
             shared,
             format,
             header,
+            id_start_bytepos,
             allele_start_bytepos,
         }
     }
@@ -109,6 +113,11 @@ impl BcfRecord {
 }
 
 impl Record for BcfRecord {
+    fn id(&self) -> Text {
+        let (_, id) = typed_string(&self.shared[self.id_start_bytepos..]).unwrap();
+        id
+    }
+
     fn chrom(&self) -> &str {
         fn chrom_from_shared(shared: &[u8]) -> IResult<&[u8], i32> {
             let (remaining, v) = le_i32(&shared[CHROM_BYTE_RANGE])?;
