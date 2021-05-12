@@ -43,4 +43,18 @@ mod test {
             .next()
             .map(|record| assert_eq!(record.alt_alleles(), vec![b"A"]));
     }
+
+    #[test]
+    fn test_info_platforms() {
+        let records = BcfRecords::from_path("resources/example.uncompressed.bcf").unwrap();
+        let platforms_sum = records
+            .map(|record| {
+                record
+                    .info(b"platforms")
+                    .map(|values| values.integer()[0] as usize)
+            })
+            .flatten()
+            .sum::<usize>();
+        assert_eq!(platforms_sum, 3028);
+    }
 }
