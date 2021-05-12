@@ -7,17 +7,18 @@ edition = "2018"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-bgzip = "0.1"
 itertools = "0.10"
 anyhow = "1.0"
 nom = "6.1"
 num_enum = "0.5"
 num_enum_derive = "0.5"
 strum = { version = "0.20", features = ["derive"] }
-counter = "0.5"
 multimap = "0.8"
-flate2 = "1.0"
-niffler = "2.3"
+
+[dependencies.niffler]
+version = "2.3"
+default-features = false
+features = ["gz"]
 
 [profile.release]
 lto = "fat"
