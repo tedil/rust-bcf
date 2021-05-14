@@ -5,6 +5,7 @@ pub mod types;
 
 pub use reader::BcfRecords;
 pub use record::BcfRecord;
+pub use record::Record;
 
 #[cfg(test)]
 mod test {

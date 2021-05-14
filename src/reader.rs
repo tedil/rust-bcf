@@ -2,7 +2,6 @@ use crate::parser;
 use crate::record::BcfRecord;
 use crate::types::Header;
 use nom::lib::std::mem::size_of;
-use std::error::Error;
 use std::io::Read;
 use std::path::Path;
 use std::rc::Rc;
@@ -24,14 +23,14 @@ impl<R: Read> BcfRecords<R> {
 }
 
 impl BcfRecords<Box<dyn Read>> {
-    pub fn from_path<P: AsRef<Path>>(path: P) -> Result<Self, Box<dyn Error>> {
+    pub fn from_path<P: AsRef<Path>>(path: P) -> anyhow::Result<Self> {
         let (reader, _format) = niffler::from_path(path)?;
         Self::new(reader)
     }
 }
 
 impl<R: Read> BcfRecords<R> {
-    pub fn new(mut reader: R) -> Result<Self, Box<dyn Error>> {
+    pub fn new(mut reader: R) -> anyhow::Result<Self> {
         let mut input = [0u8; 5];
         reader.read_exact(&mut input)?;
         let (input, version) = parser::bcf_version(&input).unwrap();
