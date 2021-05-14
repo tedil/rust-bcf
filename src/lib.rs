@@ -134,4 +134,61 @@ mod test {
             assert_eq!(values, vec![b"String1", b"String2"])
         });
     }
+
+    #[test]
+    fn test_info_n_alt_alleles_integers() {
+        let mut records = BcfRecords::from_path("resources/types.bcf").unwrap();
+        records.next().map(|record| {
+            let field = record.info(b"INTA").unwrap();
+            let values = field.integer();
+            assert_eq!(values.len(), record.alt_alleles().len());
+            assert_eq!(values, [1]);
+        });
+    }
+
+    #[test]
+    fn test_info_n_alleles_integers() {
+        let mut records = BcfRecords::from_path("resources/types.bcf").unwrap();
+        records.next().map(|record| {
+            let field = record.info(b"INTR").unwrap();
+            let values = field.integer();
+            assert_eq!(values.len(), record.alt_alleles().len() + 1);
+            assert_eq!(values, [1, 2]);
+        });
+    }
+
+    #[test]
+    fn test_info_variable_number_integers() {
+        let mut records = BcfRecords::from_path("resources/types.bcf").unwrap();
+        records.next().map(|record| {
+            let field = record.info(b"INTX").unwrap();
+            let values = field.integer();
+            assert_eq!(values.len(), 4);
+            assert_eq!(values, [1, 2, 3, 4]);
+        });
+    }
+
+    #[test]
+    fn test_format_single_integer() {
+        let mut records = BcfRecords::from_path("resources/types.bcf").unwrap();
+        records.next().map(|record| {
+            let samples = record.format(b"INT").unwrap();
+            let field = &samples[0];
+            let values = field.integer();
+            assert_eq!(values.len(), 1);
+            assert_eq!(values[0], 1);
+        });
+    }
+
+    #[test]
+    fn test_format_n_genotypes_integer() {
+        let mut records = BcfRecords::from_path("resources/types.bcf").unwrap();
+        records.next().map(|record| {
+            let samples = record.format(b"INTG").unwrap();
+            let field = &samples[0];
+            let values = field.integer();
+            assert_eq!(values.len(), 1);
+            assert_eq!(values[0], 1);
+        });
+    }
 }
