@@ -150,7 +150,7 @@ fn raw_vec_from_td<'a, 'b>(
         }
         TypeKind::Float32 => {
             let (data, input) = input.split_at(std::mem::size_of::<f32>() * num_elements);
-            (input, RawVec::Int32(data))
+            (input, RawVec::Float32(data))
         }
         TypeKind::String => {
             let (data, input) = input.split_at(std::mem::size_of::<u8>() * num_elements);

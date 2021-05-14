@@ -116,7 +116,7 @@ impl TypedVec {
         }
     }
 
-    pub fn float(&mut self) -> &[f32] {
+    pub fn float(&self) -> &[f32] {
         match self {
             TypedVec::Float32(v) => v.as_slice(),
             _ => unreachable!(),
