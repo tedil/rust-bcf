@@ -31,6 +31,8 @@ pub trait Record {
     fn format(&self, tag: &[u8]) -> Option<Vec<TypedVec>>;
 
     fn genotypes(&self) -> Vec<Vec<GenotypeAllele>>;
+
+    fn has_flag(&self, tag: &[u8]) -> bool;
 }
 
 #[derive(Debug)]
@@ -261,6 +263,10 @@ impl Record for BcfRecord {
                     .collect()
             })
             .collect()
+    }
+
+    fn has_flag(&self, tag: &[u8]) -> bool {
+        self.info(tag).is_some()
     }
 }
 

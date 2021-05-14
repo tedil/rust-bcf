@@ -124,7 +124,16 @@ impl TypedVec {
     }
 
     pub fn flag(&self) -> bool {
-        unimplemented!()
+        // from the VCFv4.3 spec:
+        // """
+        // Flags values — which can only appear in INFO fields — in BCF2 should be encoded by any non-reserved value.
+        // The recommended best practice is to encode the value as an 1-element INT8 (type 0x11) with value of 1 to indicate present
+        // """
+        // Note the term "recommended best practice"; basically, the value for a flag may be anything,
+        // so even TypeDescriptor { kind: Missing, num_elements: 0 } is valid.
+        // That means that, if we can successfully call `flag()`, it has to be present.
+        // We recommend using `record.has_flag(b"some_flag")` instead.
+        true
     }
 
     pub fn string(&self) -> Vec<&[u8]> {

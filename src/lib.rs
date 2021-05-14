@@ -57,4 +57,15 @@ mod test {
             .sum::<usize>();
         assert_eq!(platforms_sum, 3028);
     }
+
+    #[test]
+    fn test_flag() {
+        let mut records = BcfRecords::from_path("resources/types.bcf").unwrap();
+        records
+            .next()
+            .map(|record| assert_eq!(record.has_flag(b"FLAG"), true));
+        records
+            .next()
+            .map(|record| assert_eq!(record.has_flag(b"FLAG"), false));
+    }
 }
