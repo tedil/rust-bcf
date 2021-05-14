@@ -68,4 +68,30 @@ mod test {
             .next()
             .map(|record| assert_eq!(record.has_flag(b"FLAG"), false));
     }
+
+    #[test]
+    fn test_single_integer() {
+        let mut records = BcfRecords::from_path("resources/types.bcf").unwrap();
+        records
+            .next()
+            .map(|record| {
+                let field = record.info(b"INT").unwrap();
+                let values = field.integer();
+                assert_eq!(values.len(), 1);
+                assert_eq!(values[0], 1)
+            });
+    }
+
+    #[test]
+    fn test_single_float() {
+        let mut records = BcfRecords::from_path("resources/types.bcf").unwrap();
+        records
+            .next()
+            .map(|record| {
+                let field = record.info(b"FLOAT").unwrap();
+                let values = field.float();
+                assert_eq!(values.len(), 1);
+                assert_eq!(values[0], 0.5)
+            });
+    }
 }
