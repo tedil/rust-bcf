@@ -115,11 +115,37 @@ impl BcfRecord {
 }
 
 impl Record for BcfRecord {
+    /// Returns the ID of this record. If not set (equivalent to `.` in VCF), return `b""`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use rust_bcf::BcfRecords;
+    /// use rust_bcf::Record;
+    ///
+    /// let mut records = BcfRecords::from_path("resources/example.id.bcf").unwrap();
+    /// for record in records {
+    ///     assert_eq!(record.id(), b"TestId123");
+    /// }
+    /// ```
     fn id(&self) -> Text {
         let (_, id) = typed_string(&self.shared[self.id_start_bytepos..]).unwrap();
         id
     }
 
+    /// Returns the target sequence identifier of this record, i.e. CHROM.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use rust_bcf::BcfRecords;
+    /// use rust_bcf::Record;
+    ///
+    /// let mut records = BcfRecords::from_path("resources/example.id.bcf").unwrap();
+    /// for record in records {
+    ///     assert_eq!(record.chrom(), "chr1")
+    /// }
+    /// ```
     fn chrom(&self) -> &str {
         fn chrom_from_shared(shared: &[u8]) -> IResult<&[u8], i32> {
             let (remaining, v) = le_i32(&shared[CHROM_BYTE_RANGE])?;
@@ -129,6 +155,21 @@ impl Record for BcfRecord {
         &self.header.contigs[idx].id
     }
 
+    /// Returns the position of this record, i.e. POS, 0-based.
+    ///
+    /// Note that BCF is 0-based, while VCF is 1-based.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use rust_bcf::BcfRecords;
+    /// use rust_bcf::Record;
+    ///
+    /// let mut records = BcfRecords::from_path("resources/example.id.bcf").unwrap();
+    /// for record in records {
+    ///     assert_eq!(record.pos(), 817185)
+    /// }
+    /// ```
     fn pos(&self) -> u32 {
         fn pos_from_shared(shared: &[u8]) -> IResult<&[u8], u32> {
             let (remaining, v) = le_i32(&shared[POS_BYTE_RANGE])?;
@@ -137,11 +178,37 @@ impl Record for BcfRecord {
         pos_from_shared(&self.shared).unwrap().1
     }
 
+    /// Returns the reference allele of this record, i.e. REF.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use rust_bcf::BcfRecords;
+    /// use rust_bcf::Record;
+    ///
+    /// let mut records = BcfRecords::from_path("resources/example.id.bcf").unwrap();
+    /// for record in records {
+    ///     assert_eq!(record.ref_allele(), b"G")
+    /// }
+    /// ```
     fn ref_allele(&self) -> Text {
         let (_, ref_allele) = typed_string(&self.shared[self.allele_start_bytepos..]).unwrap();
         ref_allele
     }
 
+    /// Returns the alternative alleles of this record, i.e. ALT.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use rust_bcf::BcfRecords;
+    /// use rust_bcf::Record;
+    ///
+    /// let mut records = BcfRecords::from_path("resources/example.id.bcf").unwrap();
+    /// for record in records {
+    ///     assert_eq!(record.alt_alleles(), [b"A"])
+    /// }
+    /// ```
     fn alt_alleles(&self) -> Vec<Text> {
         let n_allele = self.n_alleles();
         let start = self.allele_start_bytepos;
@@ -156,6 +223,19 @@ impl Record for BcfRecord {
             .1
     }
 
+    /// Returns the quality value of this record, i.e. QUAL.
+    /// If not set (equivalent to `.` in VCF), return `None`.
+    /// # Examples
+    ///
+    /// ```
+    /// use rust_bcf::BcfRecords;
+    /// use rust_bcf::Record;
+    ///
+    /// let mut records = BcfRecords::from_path("resources/example.id.bcf").unwrap();
+    /// for record in records {
+    ///     assert_eq!(record.qual(), Some(50.0))
+    /// }
+    /// ```
     fn qual(&self) -> Option<f32> {
         fn qual_from_shared(shared: &[u8]) -> IResult<&[u8], f32> {
             let (remaining, v) = le_f32(&shared[QUAL_BYTE_RANGE])?;
@@ -171,6 +251,19 @@ impl Record for BcfRecord {
         }
     }
 
+    /// Returns the list of filters for this record, i.e. FILTER.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use rust_bcf::BcfRecords;
+    /// use rust_bcf::Record;
+    ///
+    /// let mut records = BcfRecords::from_path("resources/example.id.bcf").unwrap();
+    /// for record in records {
+    ///     assert_eq!(record.filters(), ["PASS"])
+    /// }
+    /// ```
     fn filters(&self) -> Vec<&str> {
         // lazy access requires "reading" and discarding the alleles, since these have unknown size
         let (_, byte_pos) = self.alleles();
@@ -190,6 +283,19 @@ impl Record for BcfRecord {
             .collect()
     }
 
+    /// For a given INFO tag, return its contents.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use rust_bcf::BcfRecords;
+    /// use rust_bcf::Record;
+    ///
+    /// let mut records = BcfRecords::from_path("resources/example.id.bcf").unwrap();
+    /// for record in records {
+    ///     assert_eq!(record.info(b"platforms").map(|value| value.integer()[0]), Some(3))
+    /// }
+    /// ```
     fn info(&self, tag: &[u8]) -> Option<TypedVec> {
         // lazy access requires "reading" and discarding the alleles, since these have unknown size
         let (_, byte_pos) = self.alleles();
@@ -222,6 +328,20 @@ impl Record for BcfRecord {
             .next()
     }
 
+    /// For a given INFO tag, return its contents.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use rust_bcf::BcfRecords;
+    /// use rust_bcf::Record;
+    ///
+    /// let mut records = BcfRecords::from_path("resources/example.id.bcf").unwrap();
+    /// let sample = 1;
+    /// for record in records {
+    ///     assert_eq!(record.format(b"DP").map(|samples| samples[sample].integer()[0]), Some(1301))
+    /// }
+    /// ```
     fn format(&self, tag: &[u8]) -> Option<Vec<TypedVec>> {
         if self.format.is_empty() {
             return None;
