@@ -59,7 +59,7 @@ mod test {
     }
 
     #[test]
-    fn test_flag() {
+    fn test_info_flag() {
         let mut records = BcfRecords::from_path("resources/types.bcf").unwrap();
         records
             .next()
@@ -70,28 +70,68 @@ mod test {
     }
 
     #[test]
-    fn test_single_integer() {
+    fn test_info_single_integer() {
         let mut records = BcfRecords::from_path("resources/types.bcf").unwrap();
-        records
-            .next()
-            .map(|record| {
-                let field = record.info(b"INT").unwrap();
-                let values = field.integer();
-                assert_eq!(values.len(), 1);
-                assert_eq!(values[0], 1)
-            });
+        records.next().map(|record| {
+            let field = record.info(b"INT").unwrap();
+            let values = field.integer();
+            assert_eq!(values.len(), 1);
+            assert_eq!(values[0], 1)
+        });
     }
 
     #[test]
-    fn test_single_float() {
+    fn test_info_single_float() {
         let mut records = BcfRecords::from_path("resources/types.bcf").unwrap();
-        records
-            .next()
-            .map(|record| {
-                let field = record.info(b"FLOAT").unwrap();
-                let values = field.float();
-                assert_eq!(values.len(), 1);
-                assert_eq!(values[0], 0.5)
-            });
+        records.next().map(|record| {
+            let field = record.info(b"FLOAT").unwrap();
+            let values = field.float();
+            assert_eq!(values.len(), 1);
+            assert_eq!(values[0], 0.5)
+        });
+    }
+
+    #[test]
+    fn test_info_single_string() {
+        let mut records = BcfRecords::from_path("resources/types.bcf").unwrap();
+        records.next().map(|record| {
+            let field = record.info(b"STRING").unwrap();
+            let values = field.string();
+            assert_eq!(values.len(), 1);
+            assert_eq!(values[0], b"String")
+        });
+    }
+
+    #[test]
+    fn test_info_two_integers() {
+        let mut records = BcfRecords::from_path("resources/types.bcf").unwrap();
+        records.next().map(|record| {
+            let field = record.info(b"INT2").unwrap();
+            let values = field.integer();
+            assert_eq!(values.len(), 2);
+            assert_eq!(values, [1, 2]);
+        });
+    }
+
+    #[test]
+    fn test_info_two_floats() {
+        let mut records = BcfRecords::from_path("resources/types.bcf").unwrap();
+        records.next().map(|record| {
+            let field = record.info(b"FLOAT2").unwrap();
+            let values = field.float();
+            assert_eq!(values.len(), 2);
+            assert_eq!(values, [0.5, 1.0]);
+        });
+    }
+
+    #[test]
+    fn test_info_two_strings() {
+        let mut records = BcfRecords::from_path("resources/types.bcf").unwrap();
+        records.next().map(|record| {
+            let field = record.info(b"STRING2").unwrap();
+            let values = field.string();
+            assert_eq!(values.len(), 2);
+            assert_eq!(values, vec![b"String1", b"String2"])
+        });
     }
 }
