@@ -8,9 +8,17 @@ use crate::parser;
 use nom::combinator::map;
 use nom::multi::many0;
 use nom::number::complete::{le_f32, le_i16, le_i32, le_i8};
-use nom::IResult;
+use nom::{IResult, InputTakeAtPosition};
 
-pub(crate) const MISSING_QUAL: u32 = 0x7F800001;
+pub(crate) const NAN_FLOAT: u32 = 0x7FC00000;
+pub(crate) const MISSING_FLOAT: u32 = 0x7F800001;
+#[allow(dead_code)]
+pub(crate) const END_OF_VECTOR_FLOAT_32: u32 = 0x7F800002;
+pub(crate) const END_OF_VECTOR_INT_8: u8 = 0x81;
+#[allow(dead_code)]
+pub(crate) const END_OF_VECTOR_INT_16: u16 = 0x8001;
+#[allow(dead_code)]
+pub(crate) const END_OF_VECTOR_INT_32: u32 = 0x80000001;
 
 pub(crate) type Text = Vec<u8>;
 // pub(crate) type TextSlice<'a> = &'a [u8];
@@ -69,6 +77,10 @@ impl<'a> From<RawVec<'a>> for TypedVec {
             RawVec::Missing => TypedVec::Missing,
             RawVec::Int8(input) => {
                 fn parse(input: &[u8]) -> IResult<&[u8], Vec<i32>> {
+                    // for Int8, we can split the input bytes at the END_OF_VECTOR_INT_8 byte, i.e.
+                    // trim off excess bytes (used for unequal length genotype fields)
+                    let (_end_of_vector_bytes, input) =
+                        input.split_at_position_complete(|b| b == END_OF_VECTOR_INT_8)?;
                     let (input, data) = many0(map(le_i8, Into::into))(input)?;
                     Ok((input, data))
                 }
@@ -77,6 +89,7 @@ impl<'a> From<RawVec<'a>> for TypedVec {
                 TypedVec::Int32(data)
             }
             RawVec::Int16(input) => {
+                // TODO trim off END_OF_VECTOR_INT_16 values
                 fn parse(input: &[u8]) -> IResult<&[u8], Vec<i32>> {
                     let (input, data) = many0(map(le_i16, Into::into))(input)?;
                     Ok((input, data))
@@ -86,6 +99,7 @@ impl<'a> From<RawVec<'a>> for TypedVec {
                 TypedVec::Int32(data)
             }
             RawVec::Int32(input) => {
+                // TODO trim off END_OF_VECTOR_INT_32 values
                 fn parse(input: &[u8]) -> IResult<&[u8], Vec<i32>> {
                     let (input, data) = many0(le_i32)(input)?;
                     Ok((input, data))
@@ -95,6 +109,7 @@ impl<'a> From<RawVec<'a>> for TypedVec {
                 TypedVec::Int32(data)
             }
             RawVec::Float32(input) => {
+                // TODO trim off END_OF_VECTOR_FLOAT values
                 fn parse(input: &[u8]) -> IResult<&[u8], Vec<f32>> {
                     let (input, data) = many0(le_f32)(input)?;
                     Ok((input, data))

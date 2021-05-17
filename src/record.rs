@@ -261,9 +261,11 @@ impl Record for BcfRecord {
         }
         let qual = qual_from_shared(&self.shared).unwrap().1;
         if qual.is_nan() && qual.to_bits() & 0b0000_0000_0100_0000_0000_0000_0000_0000 != 0
-            || qual.to_bits() == MISSING_QUAL
+            || qual.to_bits() == MISSING_FLOAT
         {
             None
+        } else if qual.to_bits() == NAN_FLOAT {
+            Some(f32::NAN)
         } else {
             Some(qual)
         }
