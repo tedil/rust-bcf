@@ -5,12 +5,17 @@ use nom::lib::std::mem::size_of;
 use std::io::Read;
 use std::path::Path;
 use std::rc::Rc;
+#[cfg(feature = "sync")]
+use std::sync::Arc;
 
 const BCF_MAJOR_VERSION: u8 = 2;
 const BCF_MINOR_VERSION: u8 = 2;
 
 pub struct BcfRecords<R: Read> {
+    #[cfg(not(feature = "sync"))]
     header: Rc<Header>,
+    #[cfg(feature = "sync")]
+    header: Arc<Header>,
     length_buf: [u8; size_of::<u32>() * 2],
     record_buf: Vec<u8>,
     inner: Box<R>,
@@ -49,7 +54,10 @@ impl<R: Read> BcfRecords<R> {
         assert!(input.is_empty());
 
         Ok(Self {
+            #[cfg(not(feature = "sync"))]
             header: Rc::new(header),
+            #[cfg(feature = "sync")]
+            header: Arc::new(header),
             length_buf: [0u8; size_of::<u32>() * 2],
             record_buf: Vec::new(),
             inner: Box::new(reader),

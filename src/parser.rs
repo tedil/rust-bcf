@@ -1,6 +1,9 @@
 use std::collections::HashMap;
 use std::convert::TryFrom;
+#[cfg(not(feature = "sync"))]
 use std::rc::Rc;
+#[cfg(feature = "sync")]
+use std::sync::Arc;
 
 use itertools::Itertools;
 use multimap::MultiMap;
@@ -212,7 +215,8 @@ pub(crate) fn record_length(input: &[u8]) -> IResult<&[u8], (u32, u32)> {
 pub(crate) fn raw_record_from_length(
     l_shared: u32,
     l_indiv: u32,
-    header: Rc<Header>,
+    #[cfg(not(feature = "sync"))] header: Rc<Header>,
+    #[cfg(feature = "sync")] header: Arc<Header>,
     input: &[u8],
 ) -> IResult<&[u8], BcfRecord> {
     let (shared, input) = input.split_at(l_shared as usize);

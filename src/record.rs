@@ -7,9 +7,13 @@ use nom::number::streaming::{le_f32, le_i16, le_i32, le_u24};
 use nom::IResult;
 
 use crate::parser::{raw_genotype_field, raw_info_pair, type_descriptor, typed_ints, typed_string};
-use crate::types::{Header, HeaderValue, Text, TypeDescriptor, TypeKind, TypedVec, MISSING_QUAL};
+use crate::types::{
+    Header, HeaderValue, Text, TypeDescriptor, TypeKind, TypedVec, MISSING_FLOAT, NAN_FLOAT,
+};
 use itertools::Itertools;
 use nom::number::complete::le_u8;
+#[cfg(feature = "sync")]
+use std::sync::Arc;
 
 pub trait Record {
     fn id(&self) -> Text;
@@ -35,11 +39,20 @@ pub trait Record {
     fn has_flag(&self, tag: &[u8]) -> bool;
 }
 
+#[cfg(feature = "sync")]
+unsafe impl Sync for BcfRecord {}
+
+#[cfg(feature = "sync")]
+unsafe impl Sync for Header {}
+
 #[derive(Debug)]
 pub struct BcfRecord {
     pub(crate) shared: Vec<u8>,
     pub(crate) format: Vec<u8>,
+    #[cfg(not(feature = "sync"))]
     pub(crate) header: Rc<Header>,
+    #[cfg(feature = "sync")]
+    pub(crate) header: Arc<Header>,
     id_start_bytepos: usize,
     allele_start_bytepos: usize,
 }
@@ -55,7 +68,12 @@ const POS_BYTE_RANGE: Range<usize> = S_I32..S_I32 * 2;
 const QUAL_BYTE_RANGE: Range<usize> = S_I32 * 3..S_I32 * 3 + S_F32;
 
 impl BcfRecord {
-    pub(crate) fn new(shared: Vec<u8>, format: Vec<u8>, header: Rc<Header>) -> Self {
+    pub(crate) fn new(
+        shared: Vec<u8>,
+        format: Vec<u8>,
+        #[cfg(not(feature = "sync"))] header: Rc<Header>,
+        #[cfg(feature = "sync")] header: Arc<Header>,
+    ) -> Self {
         // The list of alleles starts right after ID
         let id_start_bytepos = S_I32 + S_I32 + S_I32 + S_F32 + S_I16 + S_I16 + S_U32;
         // however, ID is a "typed string" in bcf-speak, so we have to read the type descriptor (1 byte)

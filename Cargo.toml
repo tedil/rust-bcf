@@ -26,6 +26,10 @@ version = "2.3"
 default-features = false
 features = ["gz"]
 
+[features]
+sync = []
+
+
 [profile.release]
 lto = "fat"
 codegen-units = 1
