@@ -45,7 +45,7 @@ unsafe impl Sync for BcfRecord {}
 #[cfg(feature = "sync")]
 unsafe impl Sync for Header {}
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct BcfRecord {
     pub(crate) shared: Vec<u8>,
     pub(crate) format: Vec<u8>,
@@ -348,7 +348,7 @@ impl Record for BcfRecord {
             .next()
     }
 
-    /// For a given INFO tag, return its contents.
+    /// For a given FORMAT tag, return its contents.
     ///
     /// # Examples
     ///

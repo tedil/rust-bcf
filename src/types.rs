@@ -158,13 +158,16 @@ impl TypedVec {
         }
     }
 }
+use getset::Getters;
+use indexmap::IndexMap;
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Getters)]
+#[getset(get = "pub")]
 pub struct Header {
     pub(crate) meta: MultiMap<String, HeaderValue>,
-    pub(crate) info: HashMap<usize, HeaderInfo>,
+    pub(crate) info: IndexMap<usize, HeaderInfo>,
     pub(crate) info_tag_to_offset: HashMap<String, usize>,
-    pub(crate) format: HashMap<usize, HeaderFormat>,
+    pub(crate) format: IndexMap<usize, HeaderFormat>,
     pub(crate) format_tag_to_offset: HashMap<String, usize>,
     pub(crate) contigs: Vec<HeaderContig>,
     pub(crate) samples: Vec<Sample>,
@@ -172,7 +175,7 @@ pub struct Header {
 
 pub type HeaderKey<'a> = &'a str;
 
-#[derive(Debug, Eq, PartialEq, EnumString)]
+#[derive(Debug, Clone, Eq, PartialEq, EnumString)]
 pub enum InfoType {
     Integer,
     Float,
@@ -181,7 +184,7 @@ pub enum InfoType {
     String,
 }
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq, Copy, Clone)]
 pub enum InfoNumber {
     Count(usize),
     Alleles,
@@ -190,7 +193,7 @@ pub enum InfoNumber {
     Unknown,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum HeaderValue {
     String(String),
     Info(HeaderInfo),
@@ -199,7 +202,8 @@ pub enum HeaderValue {
     Contig(HeaderContig),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Getters, Clone)]
+#[getset(get = "pub")]
 pub struct HeaderInfo {
     pub(crate) id: String,
     number: InfoNumber,
@@ -238,7 +242,7 @@ impl<'a> From<Vec<(&'a str, &'a str)>> for HeaderInfo {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct HeaderFormat {
     pub(crate) id: String,
     number: InfoNumber,
@@ -265,7 +269,7 @@ impl<'a> From<Vec<(&'a str, &'a str)>> for HeaderFormat {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct HeaderContig {
     pub(crate) id: String,
     length: Option<usize>,
@@ -285,7 +289,7 @@ impl<'a> From<Vec<(&'a str, &'a str)>> for HeaderContig {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct HeaderFilter {
     pub(crate) id: String,
     description: String,

@@ -1,3 +1,4 @@
+use indexmap::IndexMap;
 use std::collections::HashMap;
 use std::convert::TryFrom;
 #[cfg(not(feature = "sync"))]
@@ -326,7 +327,7 @@ pub(crate) fn header(header_length: u32, input: &[u8]) -> IResult<&[u8], Header>
     let format = entries.remove("FORMAT").unwrap_or_else(Vec::new);
     let contigs = entries.remove("contig").unwrap_or_else(Vec::new);
 
-    let info: HashMap<usize, HeaderInfo> = info
+    let info: IndexMap<usize, HeaderInfo> = info
         .into_iter()
         .filter_map(|v| match v {
             HeaderValue::Info(info) => Some((info.idx, info)),
@@ -335,7 +336,7 @@ pub(crate) fn header(header_length: u32, input: &[u8]) -> IResult<&[u8], Header>
         .collect();
     let info_tag_to_offset = info.iter().map(|(idx, hi)| (hi.id.clone(), *idx)).collect();
 
-    let format: HashMap<usize, HeaderFormat> = format
+    let format: IndexMap<usize, HeaderFormat> = format
         .into_iter()
         .filter_map(|v| match v {
             HeaderValue::Format(format) => Some((format.idx, format)),

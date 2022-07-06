@@ -15,11 +15,13 @@ edition = "2018"
 [dependencies]
 itertools = "0.10"
 anyhow = "1.0"
-nom = "6.1"
+nom = "7.1"
 num_enum = "0.5"
 num_enum_derive = "0.5"
-strum = { version = "0.20", features = ["derive"] }
+strum = { version = "0.24", features = ["derive"] }
 multimap = "0.8"
+getset = "0.1"
+indexmap = "1.9"
 
 [dependencies.niffler]
 version = "2.3"
@@ -36,7 +38,7 @@ codegen-units = 1
 
 [dev-dependencies]
 criterion = "0.3"
-rust-htslib = "0.36"
+rust-htslib = "0.38.2"
 
 [[bench]]
 name = "comparison"
